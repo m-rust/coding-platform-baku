@@ -1,0 +1,138 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  
+  // Personal Statistics
+  totalSubmissions      Int @default(0)
+  acceptedSubmissions   Int @default(0)
+  problemsSolved        Int @default(0)  // Unique problems with at least 1 accepted submission
+  
+  // Relations
+  problems           Problem[]
+  submissions        Submission[]
+  problemProgress    ProblemProgress[]  // Track per-problem stats
+  refreshTokens      RefreshToken[]
+}
+
+model RefreshToken {
+  id        String    @id  // UUID, also stored in JWT payload as tokenId
+  userId    Int
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Problem {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String   @db.Text
+  difficulty  String
+  tags        String[]
+  createdById Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Aggregate Statistics (public)
+  totalSubmissions      Int   @default(0)
+  acceptedSubmissions   Int   @default(0)
+  acceptanceRate        Float @default(0)  // Calculated: (accepted / total) * 100
+  
+  // Relations
+  createdBy       User              @relation(fields: [createdById], references: [id])
+  testCases       TestCase[]
+  submissions     Submission[]
+  problemProgress ProblemProgress[]
+}
+
+model TestCase {
+  id             Int     @id @default(autoincrement())
+  problemId      Int
+  input          String  @db.Text
+  expectedOutput String  @db.Text
+  isHidden       Boolean @default(false)
+  
+  problem      Problem      @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  testResults  TestResult[]
+}
+
+model Submission {
+  id             Int      @id @default(autoincrement())
+  problemId      Int
+  userId         Int
+  code           String   @db.Text
+  language       String
+  status         String
+  runtime        Int?
+  memory         Int?
+  passedTests    Int      @default(0)
+  totalTests     Int      @default(0)
+  submittedAt    DateTime @default(now())
+  
+  problem      Problem      @relation(fields: [problemId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+  testResults  TestResult[]
+  
+  @@index([userId])
+  @@index([problemId])
+  @@index([status])
+  @@index([submittedAt])
+}
+
+model TestResult {
+  id               Int     @id @default(autoincrement())
+  submissionId     Int
+  testCaseId       Int
+  passed           Boolean
+  userOutput       String? @db.Text
+  expectedOutput   String? @db.Text
+  runtime          Int?
+  error            String? @db.Text
+  
+  submission  Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  testCase    TestCase   @relation(fields: [testCaseId], references: [id])
+  
+  @@index([submissionId])
+}
+
+// NEW: Track user's progress on each problem
+model ProblemProgress {
+  id                    Int      @id @default(autoincrement())
+  userId                Int
+  problemId             Int
+  status                String   // 'not_attempted', 'attempted', 'solved'
+  attempts              Int      @default(0)
+  acceptedSubmissions   Int      @default(0)
+  lastAttemptedAt       DateTime?
+  solvedAt              DateTime?
+  bestRuntime           Int?     // Best runtime for accepted submissions
+  
+  user    User    @relation(fields: [userId], references: [id])
+  problem Problem @relation(fields: [problemId], references: [id])
+  
+  @@unique([userId, problemId])  // One progress record per user per problem
+  @@index([userId])
+  @@index([status])
+}

@@ -1,0 +1,7 @@
+/* Most layout and styling is handled with Tailwind classes.
+   This file only contains a few global tweaks. */
+
+#root {
+  min-height: 100vh;
+}
+

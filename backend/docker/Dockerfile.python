@@ -1,0 +1,14 @@
+# Line 1: Start with a base image
+FROM python:3.11-alpine
+
+# Line 2: Create a non-root user for security
+RUN adduser -D -u 1000 coderunner
+
+# Line 3: Set working directory
+WORKDIR /app
+
+# Line 4: Switch to non-root user
+USER coderunner
+
+# Line 5: Default command (we'll override this when running)
+CMD ["python"]
