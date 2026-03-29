@@ -8,10 +8,10 @@ const Home = () => {
     <div className="space-y-8">
       <section className="text-center space-y-4">
         <h1 className="text-3xl md:text-4xl font-bold text-slate-50">
-          Practice coding interview problems like LeetCode.
+          Practice coding interview problems.
         </h1>
         <p className="text-slate-300 max-w-2xl mx-auto">
-          Solve algorithm problems, run your code in isolated Docker sandboxes,
+          Solve algorithm problems,
           and track your progress over time.
         </p>
 

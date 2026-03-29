@@ -35,10 +35,10 @@ const Navbar = () => {
         <div className="flex items-center gap-3">
           <Link to="/" className="flex items-center gap-2">
             <span className="h-8 w-8 rounded bg-indigo-500 flex items-center justify-center text-sm font-bold">
-              LC
+              BK
             </span>
             <span className="font-semibold text-slate-50">
-              CodePlatform
+              Baku
             </span>
           </Link>
         </div>
