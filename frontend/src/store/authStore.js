@@ -26,10 +26,9 @@ const getInitialState = () => {
     return {
       user: parsed.user || null,
       accessToken: parsed.accessToken || null,
-      refreshToken: null,
+      refreshToken: parsed.refreshToken || null,
     };
-  }
-  catch {
+  } catch {
     return {
       user: null,
       accessToken: null,
@@ -44,7 +43,7 @@ const persistState = (state) => {
   const toStore = {
     user: state.user,
     accessToken: state.accessToken,
-    refreshToken: null,
+    refreshToken: state.refreshToken,
   };
 
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore));

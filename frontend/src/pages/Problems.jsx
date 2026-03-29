@@ -69,11 +69,6 @@ const Problems = () => {
     [search, difficulty, selectedTags]
   );
 
-  
-  useEffect(() => {
-    fetchProblems(1, false);
-  }, [fetchProblems]);
-
   useEffect(() => {
     const loadTags = async () => {
       try {
@@ -86,6 +81,9 @@ const Problems = () => {
     loadTags();
   }, []);
 
+  useEffect(() => {
+    fetchProblems(1, false);
+  }, [fetchProblems]);
 
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput), 400);

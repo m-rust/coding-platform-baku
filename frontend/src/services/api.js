@@ -40,13 +40,6 @@ const processQueue = (error, token = null) => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    console.log('Axios error in interceptor:', error);
-    console.log('error.config:', error.config);
-    console.log('error.response:', error.response);
-    console.log('error.message:', error.message);
-    
-    // return;
-
     const originalRequest = error.config;
 
     if (!error.response || error.response.status !== 401 || originalRequest._retry) {

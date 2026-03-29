@@ -14,9 +14,9 @@ import ProtectedRoute from './components/common/ProtectedRoute.jsx';
 function App() {
   return (
     <BrowserRouter>
-      <div>
+      <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col">
         <Navbar />
-        <main>
+        <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6">
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/login" element={<Login />} />
