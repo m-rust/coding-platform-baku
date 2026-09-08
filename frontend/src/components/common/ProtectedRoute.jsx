@@ -1,13 +1,17 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore.js';
+import LoadingSpinner from './LoadingSpinner.jsx';
 
 const ProtectedRoute = () => {
   const location = useLocation();
-  const { user, accessToken } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
+  const isBootstrapped = useAuthStore((state) => state.isBootstrapped);
 
-  const isAuthenticated = Boolean(user) && Boolean(accessToken);
+  if (!isBootstrapped) {
+    return <LoadingSpinner />;
+  }
 
-  if (!isAuthenticated) {
+  if (!user) {
     return (
       <Navigate
         to="/login"
@@ -21,4 +25,3 @@ const ProtectedRoute = () => {
 };
 
 export default ProtectedRoute;
-

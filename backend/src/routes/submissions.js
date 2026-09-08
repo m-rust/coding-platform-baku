@@ -6,9 +6,9 @@ import {
     getSubmission
 } from '../controller/submissionsController.js';
 import authUser from '../middleware/authUser.js';
+import { submitLimiter } from '../middleware/rateLimiters.js';
 
-// All submission routes require authentication
-router.post('/submissions', authUser, submitCode);
+router.post('/submissions', authUser, submitLimiter, submitCode);
 router.get('/submissions', authUser, getUserSubmissions);
 router.get('/submissions/:id', authUser, getSubmission);
 

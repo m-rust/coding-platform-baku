@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -20,20 +14,18 @@ model User {
   name      String?
   createdAt DateTime @default(now())
   
-  // Personal Statistics
   totalSubmissions      Int @default(0)
   acceptedSubmissions   Int @default(0)
-  problemsSolved        Int @default(0)  // Unique problems with at least 1 accepted submission
+  problemsSolved        Int @default(0)
   
-  // Relations
   problems           Problem[]
   submissions        Submission[]
-  problemProgress    ProblemProgress[]  // Track per-problem stats
+  problemProgress    ProblemProgress[]
   refreshTokens      RefreshToken[]
 }
 
 model RefreshToken {
-  id        String    @id  // UUID, also stored in JWT payload as tokenId
+  id        String    @id
   userId    Int
   expiresAt DateTime
   revokedAt DateTime?
@@ -55,12 +47,10 @@ model Problem {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   
-  // Aggregate Statistics (public)
   totalSubmissions      Int   @default(0)
   acceptedSubmissions   Int   @default(0)
-  acceptanceRate        Float @default(0)  // Calculated: (accepted / total) * 100
+  acceptanceRate        Float @default(0)
   
-  // Relations
   createdBy       User              @relation(fields: [createdById], references: [id])
   testCases       TestCase[]
   submissions     Submission[]
@@ -91,7 +81,7 @@ model Submission {
   totalTests     Int      @default(0)
   submittedAt    DateTime @default(now())
   
-  problem      Problem      @relation(fields: [problemId], references: [id])
+  problem      Problem      @relation(fields: [problemId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id])
   testResults  TestResult[]
   
@@ -112,27 +102,26 @@ model TestResult {
   error            String? @db.Text
   
   submission  Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  testCase    TestCase   @relation(fields: [testCaseId], references: [id])
+  testCase    TestCase   @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
   
   @@index([submissionId])
 }
 
-// NEW: Track user's progress on each problem
 model ProblemProgress {
   id                    Int      @id @default(autoincrement())
   userId                Int
   problemId             Int
-  status                String   // 'not_attempted', 'attempted', 'solved'
+  status                String
   attempts              Int      @default(0)
   acceptedSubmissions   Int      @default(0)
   lastAttemptedAt       DateTime?
   solvedAt              DateTime?
-  bestRuntime           Int?     // Best runtime for accepted submissions
+  bestRuntime           Int?
   
   user    User    @relation(fields: [userId], references: [id])
-  problem Problem @relation(fields: [problemId], references: [id])
+  problem Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
   
-  @@unique([userId, problemId])  // One progress record per user per problem
+  @@unique([userId, problemId])
   @@index([userId])
   @@index([status])
 }

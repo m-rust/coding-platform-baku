@@ -1,236 +1,368 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import os from 'os';
+import { acquire, release } from './judgeQueue.js';
 
-const execPromise = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+const MARKER = '__JUDGE__';
+const COMPILE_TIME_LIMIT = 10;
+const MAX_OUTPUT_BYTES = 1024 * 1024;
+
+const OUTPUT_BLOCK_LIMIT = MAX_OUTPUT_BYTES / 512;
+
+export const LANGUAGES = {
+    python: {
+        label: 'Python',
+        ext: '.py',
+        image: 'python-sandbox',
+        run: 'python /app/solution.py',
+    },
+    cpp: {
+        label: 'C++',
+        ext: '.cpp',
+        image: 'cpp-sandbox',
+        compile: 'g++ /app/solution.cpp -o /app/solution -std=c++17 -O2',
+        run: '/app/solution',
+    },
+    javascript: {
+        label: 'JavaScript',
+        ext: '.js',
+        image: 'node-sandbox',
+        run: 'node /app/solution.js',
+    },
+};
+
+export const SUPPORTED_LANGUAGES = Object.keys(LANGUAGES);
+
+const wrapCommand = (command, timeLimit) =>
+    `s=$(date +%s%N); ` +
+    `timeout -s KILL ${timeLimit}s ${command}; rc=$?; ` +
+    `e=$(date +%s%N); echo "${MARKER} $rc $(( (e - s) / 1000000 ))" >&2`;
+
+const batchScript = (command, count, timeLimit) =>
+    `ulimit -f ${OUTPUT_BLOCK_LIMIT}; ` +
+    `i=0; while [ $i -lt ${count} ]; do ` +
+    `s=$(date +%s%N); ` +
+    `timeout -s KILL ${timeLimit}s ${command} < /app/in/input_$i.txt > /out/out_$i.txt 2> /out/err_$i.txt; rc=$?; ` +
+    `e=$(date +%s%N); ` +
+    `echo "$i $rc $(( (e - s) / 1000000 ))" >> /out/meta.txt; ` +
+    `i=$((i + 1)); done`;
+
+const parseMarker = (stderr) => {
+    const lines = String(stderr ?? '').split('\n');
+    const index = lines.findLastIndex((line) => line.startsWith(MARKER));
+
+    if (index === -1) return null;
+
+    const [, rc, ms] = lines[index].trim().split(/\s+/);
+    lines.splice(index, 1);
+
+    return {
+        exitCode: Number(rc),
+        runtime: Number(ms),
+        stderr: lines.join('\n').trim(),
+    };
+};
+
+const readFileOrEmpty = async (file) => fs.readFile(file, 'utf8').catch(() => '');
 
 class CodeExecutor {
     constructor() {
         this.submissionsDir = path.join(os.tmpdir(), 'submissions');
     }
 
-    toDockerPath(windowsPath) {
+    toDockerPath(hostPath) {
         if (os.platform() === 'win32') {
-            let dockerPath = windowsPath.replace(/\\/g, '/');
+            let dockerPath = hostPath.replace(/\\/g, '/');
             if (dockerPath.match(/^[A-Za-z]:/)) {
                 dockerPath = '/' + dockerPath[0].toLowerCase() + dockerPath.substring(2);
             }
             return dockerPath;
         }
-        return windowsPath;
+        return hostPath;
     }
 
     async executeCode(code, input, language, timeLimit = 5) {
-        const submissionId = uuidv4();
-        const tempDir = path.join(this.submissionsDir, submissionId);
-        
+        const [result] = await this.executeBatch(code, [input], language, timeLimit);
+        return result;
+    }
+
+    async executeBatch(code, inputs, language, timeLimit = 5) {
+        const config = LANGUAGES[language];
+
+        if (!config) {
+            throw new Error(`Unsupported language: ${language}`);
+        }
+
+        if (!Array.isArray(inputs) || inputs.length === 0) {
+            throw new Error('At least one input is required');
+        }
+
+        const tempDir = path.join(this.submissionsDir, uuidv4());
+        const inDir = path.join(tempDir, 'in');
+        const outDir = path.join(tempDir, 'out');
+
         try {
-            // recusrsive : truecreates entire directory path, if it is not present
-            await fs.mkdir(tempDir, { recursive: true });
-            console.log(`Created temp directory: ${tempDir}`);
-            
-            await this.writeFiles(tempDir, code, input, language);
-            
-            let result;
-            if (language === 'python') {
-                result = await this.executePython(tempDir, timeLimit);
-            } else if (language === 'cpp') {
-                result = await this.executeCpp(tempDir, timeLimit);
-            } else {
-                throw new Error(`Unsupported language: ${language}`);
+            await fs.mkdir(inDir, { recursive: true });
+            await fs.mkdir(outDir, { recursive: true });
+
+            for (const dir of [tempDir, inDir, outDir]) {
+                await fs.chmod(dir, 0o777);
             }
-            
-            await fs.rm(tempDir, { recursive: true, force: true });
-            console.log(`Cleaned up: ${tempDir}`);
-            
-            return result;
-            
-        } catch (error) {
+
+            await fs.writeFile(path.join(tempDir, `solution${config.ext}`), code, 'utf8');
+
+            await Promise.all(
+                inputs.map((input, i) =>
+                    fs.writeFile(path.join(inDir, `input_${i}.txt`), input ?? '', 'utf8')
+                )
+            );
+
+            const mount = this.toDockerPath(tempDir);
+
+            if (config.compile) {
+                const failure = await this.compile(config, mount);
+                if (failure) return inputs.map(() => ({ ...failure }));
+            }
+
+            return await this.runBatch(config, {
+                mount,
+                outMount: this.toDockerPath(outDir),
+                outDir,
+                count: inputs.length,
+                timeLimit,
+            });
+        } finally {
             await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-            throw error;
         }
     }
 
-    async writeFiles(tempDir, code, input, language) {
-        const ext = language === 'python' ? '.py' : '.cpp';
-        const codeFile = `solution${ext}`;
-        
-        const codePath = path.join(tempDir, codeFile);
-        await fs.writeFile(codePath, code, 'utf8');
-        console.log(`Wrote code file: ${codePath}`);
-        
-        const inputPath = path.join(tempDir, 'input.txt');
-        await fs.writeFile(inputPath, input, 'utf8');
-        console.log(`Wrote input file: ${inputPath}`);
-    }
+    async compile(config, mount) {
+        const result = await this.runContainer({
+            image: config.image,
+            mounts: [{ host: mount, target: '/app' }],
+            memory: '512m',
+            timeLimit: COMPILE_TIME_LIMIT,
+            script: wrapCommand(config.compile, COMPILE_TIME_LIMIT),
+        });
 
-    async executePython(tempDir, timeLimit) {
-        console.log('Executing Python code...');
-        
-        const dockerPath = this.toDockerPath(tempDir);
-        
-        // Use sh -c to redirect input from file inside container
-        const dockerCmd = [
-            'docker run',
-            '--rm',
-            '--network none',
-            '--memory="256m"',
-            '--memory-swap="256m"',
-            '--cpus="1.0"',
-            '--pids-limit=50',
-            '--ulimit nofile=64:64',
-            '--ulimit nproc=50:50',
-            '--read-only',
-            '--tmpfs /tmp:rw,noexec,nosuid,size=10m',
-            `-v "${dockerPath}:/app:ro"`,
-            'python-sandbox',
-            'sh', '-c',
-            `"timeout ${timeLimit}s python /app/solution.py < /app/input.txt"`
-        ].join(' ');
-        
-        return await this.runCommand(dockerCmd, timeLimit);
-    }
+        if (result.status !== 'ok') return this.describeInfrastructureFailure(result);
 
-    async executeCpp(tempDir, timeLimit) {
-        console.log('Executing C++ code...');
-        
-        const dockerPath = this.toDockerPath(tempDir);
-        
-        // STEP 1: Compile
-        console.log('Step 1: Compiling...');
-        
-        const compileCmd = [
-            'docker run',
-            '--rm',
-            '--network none',
-            '--memory="512m"',
-            '--cpus="1.0"',
-            `-v "${dockerPath}:/app"`,
-            'cpp-sandbox',
-            'sh', '-c',
-            '"g++ /app/solution.cpp -o /app/solution -std=c++17 -O2 2>&1"'
-        ].join(' ');
-        
-        try {
-            const startCompile = Date.now();
-            
-            const { stdout, stderr } = await execPromise(compileCmd, {
-                timeout: 10000,
-                maxBuffer: 1024 * 1024,
-                shell: os.platform() === 'win32' ? 'cmd.exe' : '/bin/sh'
-            });
-            
-            const compileTime = Date.now() - startCompile;
-            console.log(`Compilation successful (${compileTime}ms)`);
-            
-            if (stdout || stderr) {
-                console.log('Compiler output:', stdout || stderr);
-            }
-            
-        } catch (error) {
-            console.log('Compilation failed');
+        if (result.exitCode !== 0) {
+            const timedOut = result.exitCode === 137 || result.exitCode === 124;
+
             return {
                 success: false,
                 output: '',
-                error: error.stdout || error.stderr || 'Compilation failed',
+                error: timedOut
+                    ? 'Compilation timed out'
+                    : result.stderr || 'Compilation failed',
                 runtime: 0,
-                status: 'compilation_error'
+                status: 'compilation_error',
             };
         }
-        
-        // STEP 2: Run with input redirection inside container
-        console.log('Step 2: Running executable...');
-        
-        const runCmd = [
-            'docker run',
-            '--rm',
-            '--network none',
-            '--memory="256m"',
-            '--memory-swap="256m"',
-            '--cpus="1.0"',
-            '--pids-limit=50',
-            '--ulimit nofile=64:64',
-            '--ulimit nproc=50:50',
-            '--read-only',
-            '--tmpfs /tmp:rw,noexec,nosuid,size=10m',
-            `-v "${dockerPath}:/app:ro"`,
-            'cpp-sandbox',
-            'sh', '-c',
-            `"timeout ${timeLimit}s /app/solution < /app/input.txt"`
-        ].join(' ');
-        
-        return await this.runCommand(runCmd, timeLimit);
+
+        return null;
     }
 
-    async runCommand(cmd, timeLimit) {
-        try {
-            const startTime = Date.now();
-            
-            const { stdout, stderr } = await execPromise(cmd, {
-                timeout: (timeLimit + 2) * 1000,
-                maxBuffer: 1024 * 1024,
-                shell: os.platform() === 'win32' ? 'cmd.exe' : '/bin/sh'
-            });
-            
-            const runtime = Date.now() - startTime;
-            console.log(`Execution completed in ${runtime}ms`);
-            
+    async runBatch(config, { mount, outMount, outDir, count, timeLimit }) {
+        const result = await this.runContainer({
+            image: config.image,
+            mounts: [
+                { host: mount, target: '/app', readOnly: true },
+                { host: outMount, target: '/out' },
+            ],
+            timeLimit: count * (timeLimit + 2) + 10,
+            script: batchScript(config.run, count, timeLimit),
+            expectMarker: false,
+        });
+
+        if (result.status !== 'ok') {
+            const failure = this.describeInfrastructureFailure(result);
+            return Array.from({ length: count }, () => ({ ...failure }));
+        }
+
+        const meta = new Map();
+        const metaText = await readFileOrEmpty(path.join(outDir, 'meta.txt'));
+
+        for (const line of metaText.split('\n')) {
+            const [index, rc, ms] = line.trim().split(/\s+/);
+            if (index === '' || index === undefined || rc === undefined) continue;
+            meta.set(Number(index), { exitCode: Number(rc), runtime: Number(ms) });
+        }
+
+        const results = [];
+
+        for (let i = 0; i < count; i++) {
+            const entry = meta.get(i);
+
+            if (!entry) {
+                results.push(this.describeInfrastructureFailure({ status: 'internal_error' }));
+                continue;
+            }
+
+            const [stdout, stderr] = await Promise.all([
+                readFileOrEmpty(path.join(outDir, `out_${i}.txt`)),
+                readFileOrEmpty(path.join(outDir, `err_${i}.txt`)),
+            ]);
+
+            results.push(this.describeRun(entry, stdout, stderr, timeLimit));
+        }
+
+        return results;
+    }
+
+    describeRun({ exitCode, runtime }, stdout, stderr, timeLimit) {
+        if (Buffer.byteLength(stdout) >= MAX_OUTPUT_BYTES) {
+            return {
+                success: false,
+                output: '',
+                error: 'Output Limit Exceeded (max 1MB)',
+                runtime,
+                status: 'output_limit_exceeded',
+            };
+        }
+
+        if (exitCode === 0) {
             return {
                 success: true,
                 output: stdout.trim(),
-                error: stderr ? stderr.trim() : null,
-                runtime: runtime,
-                status: 'success'
+                error: stderr.trim() || null,
+                runtime,
+                status: 'success',
             };
-            
-        } catch (error) {
-            console.log('Execution error:', error.message);
-            
-            if (error.killed || error.signal === 'SIGTERM') {
-                return {
-                    success: false,
-                    output: '',
-                    error: 'Time Limit Exceeded',
-                    runtime: timeLimit * 1000,
-                    status: 'time_limit_exceeded'
-                };
-            }
-            
-            if (error.code === 'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER') {
-                return {
-                    success: false,
-                    output: '',
-                    error: 'Output Limit Exceeded (max 1MB)',
-                    runtime: 0,
-                    status: 'output_limit_exceeded'
-                };
-            }
-            
+        }
+
+        const killedAtTimeLimit = exitCode === 137 && runtime >= timeLimit * 1000;
+
+        if (exitCode === 124 || killedAtTimeLimit) {
             return {
                 success: false,
-                output: error.stdout ? error.stdout.trim() : '',
-                error: error.stderr ? error.stderr.trim() : error.message,
-                runtime: 0,
-                status: 'runtime_error'
+                output: '',
+                error: 'Time Limit Exceeded',
+                runtime,
+                status: 'time_limit_exceeded',
             };
+        }
+
+        if (exitCode === 137) {
+            return {
+                success: false,
+                output: '',
+                error: 'Memory Limit Exceeded',
+                runtime,
+                status: 'memory_limit_exceeded',
+            };
+        }
+
+        return {
+            success: false,
+            output: stdout.trim(),
+            error: stderr.trim() || `Exited with code ${exitCode}`,
+            runtime,
+            status: 'runtime_error',
+        };
+    }
+
+    async runContainer({ image, mounts, script, timeLimit, memory = '256m', expectMarker = true }) {
+        const name = `judge-${uuidv4()}`;
+
+        await acquire();
+
+        try {
+            return await this.spawnContainer({ name, image, mounts, script, timeLimit, memory, expectMarker });
+        } finally {
+            release();
         }
     }
 
-    compareOutputs(userOutput, expectedOutput) {
-        const normalize = (str) => {
-            return str
-                .trim()
-                .replace(/\s+/g, ' ')
-                .replace(/\r\n/g, '\n');
+    async spawnContainer({ name, image, mounts, script, timeLimit, memory, expectMarker }) {
+        const args = [
+            'run', '--rm', '--init',
+            '--name', name,
+            '--network', 'none',
+            `--memory=${memory}`,
+            `--memory-swap=${memory}`,
+            '--cpus=1.0',
+            '--pids-limit=64',
+            '--ulimit', 'nofile=64:64',
+            '--cap-drop=ALL',
+            '--security-opt=no-new-privileges',
+            '--read-only',
+            '--tmpfs', '/tmp:rw,noexec,nosuid,size=16m',
+        ];
+
+        for (const { host, target, readOnly } of mounts) {
+            args.push('-v', `${host}:${target}${readOnly ? ':ro' : ''}`);
+        }
+
+        args.push(image, 'sh', '-c', script);
+
+        let stdout = '';
+        let stderr = '';
+
+        try {
+            ({ stdout, stderr } = await execFileAsync('docker', args, {
+                timeout: (timeLimit + 5) * 1000,
+                maxBuffer: MAX_OUTPUT_BYTES,
+            }));
+        } catch (error) {
+            await execFileAsync('docker', ['rm', '-f', name]).catch(() => {});
+
+            if (error.code === 'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER') {
+                return { status: 'output_limit_exceeded' };
+            }
+
+            console.error(`Judge container failed (${image}):`, error.message);
+            return { status: 'internal_error' };
+        }
+
+        if (!expectMarker) return { status: 'ok' };
+
+        const marker = parseMarker(stderr);
+
+        if (!marker) {
+            console.error(`Judge container produced no result (${image}):`, String(stderr).trim());
+            return { status: 'internal_error' };
+        }
+
+        return { status: 'ok', stdout, ...marker };
+    }
+
+    describeInfrastructureFailure(result) {
+        if (result.status === 'output_limit_exceeded') {
+            return {
+                success: false,
+                output: '',
+                error: 'Output Limit Exceeded (max 1MB)',
+                runtime: 0,
+                status: 'output_limit_exceeded',
+            };
+        }
+
+        return {
+            success: false,
+            output: '',
+            error: 'The judge could not run your code. Please try again.',
+            runtime: 0,
+            status: 'internal_error',
         };
-        
-        const normalizedUser = normalize(userOutput);
-        const normalizedExpected = normalize(expectedOutput);
-        
-        return normalizedUser === normalizedExpected;
+    }
+
+    compareOutputs(userOutput, expectedOutput) {
+        const normalize = (str) =>
+            String(str ?? '')
+                .replace(/\r\n/g, '\n')
+                .trim()
+                .split('\n')
+                .map((line) => line.trim().replace(/\s+/g, ' '))
+                .join('\n');
+
+        return normalize(userOutput) === normalize(expectedOutput);
     }
 }
 

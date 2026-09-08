@@ -3,14 +3,18 @@ import prisma from '../../db.js';
 const createTestCase = async (req,res) => {
     try{
         const problemId = parseInt(req.params.id);
-    
+
+        if(isNaN(problemId)){
+            return res.status(400).json({error : "Invalid problem ID"});
+        }
+
         const {input, expectedOutput, isHidden} = req.body;
     
         if(!input || !expectedOutput){
             return res.status(400).json({error : "Input and expectedOutput are required"})
         }
     
-        if(input.trim === '' || expectedOutput.trim() === ''){
+        if(input.trim() === '' || expectedOutput.trim() === ''){
             return res.status(400).json({error : "Input and expectedOutput cannot be empty"})
         }
     
@@ -151,7 +155,6 @@ const deleteTestCase = async (req, res) => {
     }
 };
 
-
 const getTestCase = async (req, res) => {
     try {
         const problemId = parseInt(req.params.id);
@@ -191,8 +194,6 @@ const getTestCase = async (req, res) => {
         return res.status(500).json({ error: 'Server error' });
     }
 }
-
-
 
 const getTestCases = async (req, res) => {
     try {

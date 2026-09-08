@@ -43,7 +43,6 @@ const createProblem = async (req,res) => {
     }
 }
 
-
 const updateProblem = async(req,res) => {
     try{
         const {title, description, difficulty, tags} = req.body;
@@ -83,9 +82,9 @@ const updateProblem = async(req,res) => {
         const updated = await prisma.problem.update({
             where : {id : req.problem.id},
             data : {
-                title,
-                description,
-                difficulty,
+                title: title.trim(),
+                description: description.trim(),
+                difficulty: difficulty.toLowerCase(),
                 tags
             }
         })
@@ -94,13 +93,18 @@ const updateProblem = async(req,res) => {
 
     }
     catch(error){
-        return res.json({error : "Server error"});
+        console.error('Update problem error:', error);
+        return res.status(500).json({error : "Server error"});
     }
 }
 
 const getProblem = async(req,res) => {
     try{
         const problemId = parseInt(req.params.id);
+
+        if(isNaN(problemId)){
+            return res.status(400).json({error : "Invalid problem ID"});
+        }
 
         const currProblem = await prisma.problem.findUnique({
             where : {id : problemId},
@@ -111,8 +115,7 @@ const getProblem = async(req,res) => {
                 createdBy: {
                     select: {
                         id: true,
-                        name: true,
-                        email: true
+                        name: true
                     }
                 }
             }
@@ -126,7 +129,8 @@ const getProblem = async(req,res) => {
 
     }
     catch(error){
-        return res.json({error : "Server error"});
+        console.error('Get problem error:', error);
+        return res.status(500).json({error : "Server error"});
     }
 }
 
@@ -226,8 +230,6 @@ const getAllProblems = async (req, res) => {
         });
     }
 };
-
-
 
 const deleteProblem = async (req, res) => {
     try {

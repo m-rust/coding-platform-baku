@@ -4,6 +4,10 @@ const checkProblemOwner = async (req, res, next) => {
     try{
         const problemId = parseInt(req.params.id);
 
+        if(isNaN(problemId)){
+            return res.status(400).json({error : "Invalid problem ID"});
+        }
+
         const problem = await prisma.problem.findUnique({
             where : {
                 id : problemId

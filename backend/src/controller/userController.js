@@ -6,16 +6,26 @@ import prisma from '../../db.js';
 const ACCESS_TOKEN_EXPIRES_IN = '1m';
 const REFRESH_TOKEN_EXPIRES_IN = '7d';
 const REFRESH_TOKEN_MS = 7 * 24 * 60 * 60 * 1000;
+const REFRESH_COOKIE = 'refresh_token';
+const MIN_PASSWORD_LENGTH = 8;
+
+const DUMMY_HASH = bcrypt.hashSync('invalid-placeholder-password', 10);
+
+const refreshCookieOptions = {
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: process.env.NODE_ENV === 'production',
+  path: '/api/auth',
+};
 
 const generateAccessToken = (userId) => {
   return jwt.sign(
     { userId },
-    process.env.JWT_SECRET,
+    process.env.ACCESS_JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_EXPIRES_IN }
   );
 };
 
-/** Creates a refresh token record in DB and returns the signed JWT. */
 const createRefreshTokenForUser = async (userId) => {
   const tokenId = uuidv4();
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_MS);
@@ -30,7 +40,7 @@ const createRefreshTokenForUser = async (userId) => {
 
   return jwt.sign(
     { userId, tokenId },
-    process.env.JWT_SECRET,
+    process.env.REFRESH_JWT_SECRET,
     { expiresIn: REFRESH_TOKEN_EXPIRES_IN }
   );
 };
@@ -39,10 +49,14 @@ const sendAuthResponse = async (res, user, message = 'Authenticated successfully
   const accessToken = generateAccessToken(user.id);
   const refreshToken = await createRefreshTokenForUser(user.id);
 
+  res.cookie(REFRESH_COOKIE, refreshToken, {
+    ...refreshCookieOptions,
+    maxAge: REFRESH_TOKEN_MS,
+  });
+
   return res.status(200).json({
     message,
     accessToken,
-    refreshToken,
     user: {
       id: user.id,
       email: user.email,
@@ -62,6 +76,16 @@ const register = async (req, res) => {
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Enter a valid email address' });
+    }
+
+    if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+      });
     }
 
     const existingUser = await prisma.user.findUnique({
@@ -107,14 +131,10 @@ const login = async (req, res) => {
       },
     });
 
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid Credentials' });
-    }
+    const isValid = await bcrypt.compare(password, user ? user.password : DUMMY_HASH);
 
-    const isValid = await bcrypt.compare(password, user.password);
-
-    if (!isValid) {
-      return res.status(401).json({ error: 'Incorrect Password' });
+    if (!user || !isValid) {
+      return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     return await sendAuthResponse(res, user, 'User successfully logged in');
@@ -126,13 +146,13 @@ const login = async (req, res) => {
 
 const refreshAccessToken = async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const refreshToken = req.cookies[REFRESH_COOKIE];
 
     if (!refreshToken) {
-      return res.status(400).json({ error: 'Refresh token is required' });
+      return res.status(401).json({ error: 'Refresh token is required' });
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+    const decoded = jwt.verify(refreshToken, process.env.REFRESH_JWT_SECRET);
 
     if (!decoded.tokenId) {
       return res.status(401).json({ error: 'Invalid refresh token' });
@@ -155,7 +175,6 @@ const refreshAccessToken = async (req, res) => {
 
     const user = stored.user;
 
-    // Rotation: revoke current token, issue new one
     await prisma.refreshToken.update({
       where: { id: decoded.tokenId },
       data: { revokedAt: new Date() },
@@ -164,10 +183,12 @@ const refreshAccessToken = async (req, res) => {
     const newAccessToken = generateAccessToken(user.id);
     const newRefreshToken = await createRefreshTokenForUser(user.id);
 
-    return res.status(200).json({
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken,
+    res.cookie(REFRESH_COOKIE, newRefreshToken, {
+      ...refreshCookieOptions,
+      maxAge: REFRESH_TOKEN_MS,
     });
+
+    return res.status(200).json({ accessToken: newAccessToken });
   } catch (error) {
     console.error('Error refreshing access token:', error);
 
@@ -181,15 +202,16 @@ const refreshAccessToken = async (req, res) => {
 
 const logout = async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const refreshToken = req.cookies[REFRESH_COOKIE];
+    res.clearCookie(REFRESH_COOKIE, refreshCookieOptions);
 
     if (!refreshToken) {
-      return res.status(400).json({ error: 'Refresh token is required' });
+      return res.status(200).json({ message: 'Logged out' });
     }
 
     let decoded;
     try {
-      decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+      decoded = jwt.verify(refreshToken, process.env.REFRESH_JWT_SECRET);
     } catch {
       return res.status(200).json({ message: 'Logged out' });
     }
@@ -214,9 +236,9 @@ const getCurrentUser = async (req, res) => {
   try {
     res.json({
       user: {
+        id: req.user.id,
         name: req.user.name,
         email: req.user.email,
-        userId: req.user.id,
       },
     });
   } catch (error) {

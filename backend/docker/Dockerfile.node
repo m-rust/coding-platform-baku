@@ -1,0 +1,8 @@
+FROM node:20-alpine
+
+RUN apk add --no-cache coreutils
+
+WORKDIR /app
+USER node
+
+CMD ["node"]
