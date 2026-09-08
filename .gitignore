@@ -1,0 +1,18 @@
+node_modules/
+dist/
+build/
+
+# Secrets — .env.example stays tracked
+.env
+.env.*
+!.env.example
+
+*.log
+logs/
+
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
