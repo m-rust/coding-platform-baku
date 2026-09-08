@@ -40,13 +40,18 @@ A full-stack coding practice platform: browse and solve problems, run code again
    npm install
    ```
 
-2. Create a `.env` file in `backend/` with at least:
+2. Create a `.env` file in `backend/`. Copy `backend/.env.example` and fill it in:
 
-   | Variable | Description |
-   |----------|-------------|
-   | `DATABASE_URL` | PostgreSQL connection string (Prisma format) |
-   | `JWT_SECRET` | Secret used to sign access and refresh tokens |
-   | `PORT` | API port (optional; default is `3000`) |
+   | Variable | Required | Description |
+   |----------|----------|-------------|
+   | `DATABASE_URL` | yes | PostgreSQL connection string (Prisma format) |
+   | `ACCESS_JWT_SECRET` | yes | Signs short-lived access tokens |
+   | `REFRESH_JWT_SECRET` | yes | Signs refresh tokens. Must differ from the access secret |
+   | `PORT` | no | API port (default `5000`) |
+   | `CORS_ORIGIN` | no | Allowed browser origin (default `http://localhost:5173`) |
+   | `GEMINI_API_KEY` | no | Enables `POST /api/problems/extract-from-image`. The rest of the API works without it |
+   | `JUDGE_CONCURRENCY` | no | Max judge containers at once (default: CPU cores - 1) |
+   | `JUDGE_MAX_WAITING` | no | Queue depth before submissions are rejected with 503 |
 
 3. Apply the database schema:
 
@@ -59,17 +64,26 @@ A full-stack coding practice platform: browse and solve problems, run code again
 4. Build the sandbox images (image names must match what the executor expects):
 
    ```bash
-   docker build -f docker/Dockerfile.python -t python-sandbox .
-   docker build -f docker/Dockerfile.cpp -t cpp-sandbox .
+   npm run sandbox:build
    ```
 
 5. Start the API from `backend/`:
 
    ```bash
-   node src/server.js
+   npm start     # or: npm run dev, which restarts on change
    ```
 
-The API allows CORS from `http://localhost:5173` (the default Vite dev URL).
+The API allows CORS from `CORS_ORIGIN`, which defaults to `http://localhost:5173`
+(the default Vite dev URL). Set it to your deployed frontend URL in production.
+
+### Tests
+
+```bash
+npm test
+```
+
+`judgeTest.js` needs the sandbox images built and Docker running.
+`cascadeDeleteTest.js` needs `DATABASE_URL` pointing at a reachable database.
 
 ### API base path
 
@@ -87,10 +101,10 @@ Routes are mounted under `/api` (for example `/api/auth`, problem and submission
 2. Point the app at your API. Create `frontend/.env` (or `.env.local`) if needed:
 
    ```env
-   VITE_API_URL=http://localhost:3000/api
+   VITE_API_URL=http://localhost:5000/api
    ```
 
-   Use the same host and port as your backend `PORT`. If you omit this variable, the client defaults to `http://localhost:5000/api`, so either set `PORT=5000` on the server or set `VITE_API_URL` to match your backend.
+   Use the same host and port as your backend `PORT`. Both default to `5000`, so in a default local setup you can omit this variable entirely.
 
 3. Run the dev server:
 

@@ -7,7 +7,6 @@ const getInitialState = () => {
     return {
       user: null,
       accessToken: null,
-      refreshToken: null,
     };
   }
 
@@ -17,7 +16,6 @@ const getInitialState = () => {
       return {
         user: null,
         accessToken: null,
-        refreshToken: null,
       };
     }
 
@@ -26,13 +24,11 @@ const getInitialState = () => {
     return {
       user: parsed.user || null,
       accessToken: parsed.accessToken || null,
-      refreshToken: parsed.refreshToken || null,
     };
   } catch {
     return {
       user: null,
       accessToken: null,
-      refreshToken: null,
     };
   }
 };
@@ -43,7 +39,6 @@ const persistState = (state) => {
   const toStore = {
     user: state.user,
     accessToken: state.accessToken,
-    refreshToken: state.refreshToken,
   };
 
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore));
@@ -52,15 +47,25 @@ const persistState = (state) => {
 export const useAuthStore = create((set, get) => ({
   ...getInitialState(),
 
-  setAuth: ({ user, accessToken, refreshToken }) => {
-    const nextState = { user, accessToken, refreshToken };
+  isBootstrapped: false,
+
+  completeBootstrap: () => set({ isBootstrapped: true }),
+
+  setUser: (user) => {
+    const { accessToken } = get();
+    set({ user });
+    persistState({ user, accessToken });
+  },
+
+  setAuth: ({ user, accessToken }) => {
+    const nextState = { user, accessToken };
     set(nextState);
     persistState(nextState);
   },
 
   setAccessToken: (accessToken) => {
-    const { user, refreshToken } = get();
-    const nextState = { user, accessToken, refreshToken };
+    const { user } = get();
+    const nextState = { user, accessToken };
     set(nextState);
     persistState(nextState);
   },
@@ -69,7 +74,6 @@ export const useAuthStore = create((set, get) => ({
     set({
       user: null,
       accessToken: null,
-      refreshToken: null,
     });
 
     if (typeof window !== 'undefined') {

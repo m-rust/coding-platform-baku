@@ -25,13 +25,13 @@ const Register = () => {
         password,
       });
 
-      const { accessToken, refreshToken, user } = response.data;
+      const { accessToken, user } = response.data;
 
-      if (!accessToken || !refreshToken || !user) {
+      if (!accessToken || !user) {
         throw new Error('Invalid registration response from server');
       }
 
-      setAuth({ user, accessToken, refreshToken });
+      setAuth({ user, accessToken });
       toast.success('Account created');
       navigate('/problems', { replace: true });
     } catch (error) {

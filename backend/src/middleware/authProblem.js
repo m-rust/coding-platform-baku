@@ -33,15 +33,11 @@ const authProblem = async (req,res,next) => {
         }
 
         if(typeof testCase.input !== 'string' || !testCase.input || testCase.input.trim() == ''){
-            res.status(400).json({error : `Enter valid input for ${i+1} testCase`});
+            return res.status(400).json({error : `Enter valid input for ${i+1} testCase`});
         }
 
         if(typeof testCase.expectedOutput !== 'string' || !testCase.expectedOutput || testCase.expectedOutput.trim() == ''){
-            res.status(400).json({error : `Enter valid expectedOutput for ${i+1} testCase`});
-        }
-
-        if(!testCase.input || testCase.input.trim() == ''){
-            res.status(400).json({error : `Enter valid input for ${i+1} testCase`});
+            return res.status(400).json({error : `Enter valid expectedOutput for ${i+1} testCase`});
         }
 
         if(testCase.hasOwnProperty('isHidden') && typeof testCase.isHidden !== 'boolean'){

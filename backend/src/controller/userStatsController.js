@@ -1,14 +1,9 @@
 import prisma from '../../db.js';
 
-/**
- * Get current user's overall statistics
- * GET /api/users/me/stats
- */
 const getUserStats = async (req, res) => {
     try {
         const userId = req.user.id;
         
-        // Get user with basic stats
         const user = await prisma.user.findUnique({
             where: { id: userId },
             select: {
@@ -26,12 +21,10 @@ const getUserStats = async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
         
-        // Calculate acceptance rate
         const acceptanceRate = user.totalSubmissions > 0
             ? ((user.acceptedSubmissions / user.totalSubmissions) * 100).toFixed(1)
             : 0;
         
-        // Get problems solved by difficulty
         const problemProgress = await prisma.problemProgress.findMany({
             where: {
                 userId: userId,
@@ -46,7 +39,6 @@ const getUserStats = async (req, res) => {
             }
         });
         
-        // Count by difficulty
         const byDifficulty = {
             easy: 0,
             medium: 0,
@@ -60,7 +52,6 @@ const getUserStats = async (req, res) => {
             }
         });
         
-        // Get recent submissions (last 10)
         const recentSubmissions = await prisma.submission.findMany({
             where: { userId: userId },
             include: {
@@ -77,7 +68,6 @@ const getUserStats = async (req, res) => {
             take: 10
         });
         
-        // Get submission statistics by language
         const pythonCount = await prisma.submission.count({
             where: { userId: userId, language: 'python' }
         });
@@ -86,7 +76,6 @@ const getUserStats = async (req, res) => {
             where: { userId: userId, language: 'cpp' }
         });
         
-        // Get best runtimes (top 5)
         const bestRuntimes = await prisma.problemProgress.findMany({
             where: {
                 userId: userId,
@@ -149,16 +138,11 @@ const getUserStats = async (req, res) => {
     }
 };
 
-/**
- * Get user's progress on all problems
- * GET /api/users/me/progress?status=solved&difficulty=easy
- */
 const getAllProgress = async (req, res) => {
     try {
         const userId = req.user.id;
         const { status, difficulty } = req.query;
         
-        // Build filter
         const where = {
             userId: userId
         };
@@ -167,7 +151,6 @@ const getAllProgress = async (req, res) => {
             where.status = status;
         }
         
-        // Get all progress records
         const progressRecords = await prisma.problemProgress.findMany({
             where: where,
             include: {
@@ -186,7 +169,6 @@ const getAllProgress = async (req, res) => {
             }
         });
         
-        // Filter by difficulty if specified
         let filteredRecords = progressRecords;
         if (difficulty) {
             filteredRecords = progressRecords.filter(
@@ -194,7 +176,6 @@ const getAllProgress = async (req, res) => {
             );
         }
         
-        // Format response
         const progress = filteredRecords.map(pr => ({
             problemId: pr.problemId,
             problemTitle: pr.problem.title,
@@ -208,7 +189,6 @@ const getAllProgress = async (req, res) => {
             solvedAt: pr.solvedAt
         }));
         
-        // Get summary counts
         const summary = {
             total: progressRecords.length,
             solved: progressRecords.filter(pr => pr.status === 'solved').length,
@@ -226,10 +206,6 @@ const getAllProgress = async (req, res) => {
     }
 };
 
-/**
- * Get user's progress on specific problem
- * GET /api/users/me/progress/:problemId
- */
 const getProblemProgress = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -239,7 +215,6 @@ const getProblemProgress = async (req, res) => {
             return res.status(400).json({ error: 'Invalid problem ID' });
         }
         
-        // Check if problem exists
         const problem = await prisma.problem.findUnique({
             where: { id: problemId },
             select: {
@@ -256,7 +231,6 @@ const getProblemProgress = async (req, res) => {
             return res.status(404).json({ error: 'Problem not found' });
         }
         
-        // Get user's progress on this problem
         const progress = await prisma.problemProgress.findUnique({
             where: {
                 userId_problemId: {
@@ -266,7 +240,6 @@ const getProblemProgress = async (req, res) => {
             }
         });
         
-        // Get user's submissions for this problem
         const submissions = await prisma.submission.findMany({
             where: {
                 userId: userId,
@@ -286,7 +259,6 @@ const getProblemProgress = async (req, res) => {
             }
         });
         
-        // If no progress record exists, user hasn't attempted this problem
         if (!progress) {
             return res.status(200).json({
                 problem: {

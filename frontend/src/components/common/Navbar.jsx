@@ -5,21 +5,15 @@ import toast from 'react-hot-toast';
 
 const Navbar = () => {
   const navigate = useNavigate();
-  const { user, refreshToken, clearAuth } = useAuthStore();
+  const { user, clearAuth } = useAuthStore();
   const isAuthenticated = Boolean(user);
 
   const handleLogout = async () => {
-    try {
-      if (refreshToken) {
-        await api.post('/auth/logout', { refreshToken });
-      }
-    } catch {
-      // ignore logout errors
-    } finally {
-      clearAuth();
-      toast.success('Logged out');
-      navigate('/login');
-    }
+    await api.post('/auth/logout').catch(() => null);
+
+    clearAuth();
+    toast.success('Logged out');
+    navigate('/login');
   };
 
   const linkClass = ({ isActive }) =>

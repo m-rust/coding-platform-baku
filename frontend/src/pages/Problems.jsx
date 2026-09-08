@@ -32,7 +32,7 @@ const Problems = () => {
   const [availableTags, setAvailableTags] = useState([]);
 
   const fetchProblems = useCallback(
-    async (page = 1, append = false) => {
+    async (page = 1, append = false, signal) => {
       if (page === 1) setIsLoading(true);
       else setIsLoadingMore(true);
       setError('');
@@ -45,7 +45,7 @@ const Problems = () => {
         params.set('page', String(page));
         params.set('limit', String(LIMIT));
 
-        const response = await api.get(`/problems?${params.toString()}`);
+        const response = await api.get(`/problems?${params.toString()}`, { signal });
         const list = response.data.problems || [];
         const pag = response.data.pagination || {};
 
@@ -57,13 +57,17 @@ const Problems = () => {
           hasMore: pag.hasMore ?? false,
         });
       } catch (err) {
+        if (signal?.aborted) return;
+
         const message =
           err.response?.data?.error || err.message || 'Failed to load problems';
         setError(message);
         if (!append) setProblems([]);
       } finally {
-        setIsLoading(false);
-        setIsLoadingMore(false);
+        if (!signal?.aborted) {
+          setIsLoading(false);
+          setIsLoadingMore(false);
+        }
       }
     },
     [search, difficulty, selectedTags]
@@ -82,7 +86,9 @@ const Problems = () => {
   }, []);
 
   useEffect(() => {
-    fetchProblems(1, false);
+    const controller = new AbortController();
+    fetchProblems(1, false, controller.signal);
+    return () => controller.abort();
   }, [fetchProblems]);
 
   useEffect(() => {

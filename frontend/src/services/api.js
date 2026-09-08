@@ -5,10 +5,12 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
 });
 
 const refreshClient = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
 });
 
 api.interceptors.request.use((config) => {
@@ -48,15 +50,7 @@ api.interceptors.response.use(
 
     originalRequest._retry = true;
 
-    const { refreshToken, user, clearAuth, setAuth } = useAuthStore.getState();
-
-    if (!refreshToken) {
-      clearAuth();
-      if (typeof window !== 'undefined') {
-        window.location.href = '/login';
-      }
-      return Promise.reject(error);
-    }
+    const { clearAuth, setAccessToken } = useAuthStore.getState();
 
     if (isRefreshing) {
       return new Promise((resolve, reject) => {
@@ -75,15 +69,10 @@ api.interceptors.response.use(
     isRefreshing = true;
 
     try {
-      const response = await refreshClient.post('/auth/refresh', { refreshToken });
+      const response = await refreshClient.post('/auth/refresh');
       const newAccessToken = response.data.accessToken;
-      const newRefreshToken = response.data.refreshToken;
 
-      setAuth({
-        user,
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken,
-      });
+      setAccessToken(newAccessToken);
 
       processQueue(null, newAccessToken);
 
@@ -94,11 +83,8 @@ api.interceptors.response.use(
       return api(originalRequest);
     } catch (refreshError) {
       processQueue(refreshError, null);
-      clearAuth();
 
-      if (typeof window !== 'undefined') {
-        window.location.href = '/login';
-      }
+      clearAuth();
 
       return Promise.reject(refreshError);
     } finally {

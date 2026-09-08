@@ -1,72 +1,63 @@
 import prisma from '../../db.js'
 
-import codeExecutor from '../services/codeExecutor.js';
+import codeExecutor, { SUPPORTED_LANGUAGES } from '../services/codeExecutor.js';
+import { isSaturated, tryClaimUser, releaseUser } from '../services/judgeQueue.js';
 
-/**
- * Submit code for a problem
- * POST /api/submissions
- */
 const submitCode = async (req, res) => {
+    const userId = req.user.id;
+    let claimed = false;
+
     try {
         const { problemId, code, language } = req.body;
-        const userId = req.user.id;
-        
-        // ========== VALIDATION ==========
-        
-        // Check required fields
+
         if (!problemId || !code || !language) {
-            return res.status(400).json({ 
-                error: 'Problem ID, code, and language are required' 
+            return res.status(400).json({
+                error: 'Problem ID, code, and language are required'
             });
         }
-        
-        // Validate problem ID
+
         const problemIdInt = parseInt(problemId);
         if (isNaN(problemIdInt)) {
             return res.status(400).json({ error: 'Invalid problem ID' });
         }
-        
-        // Validate code not empty
+
         if (code.trim() === '') {
             return res.status(400).json({ error: 'Code cannot be empty' });
         }
-        
-        // Validate language
-        if (!['python', 'cpp'].includes(language)) {
-            return res.status(400).json({ 
-                error: 'Language must be "python" or "cpp"' 
+
+        if (!SUPPORTED_LANGUAGES.includes(language)) {
+            return res.status(400).json({
+                error: `Language must be one of: ${SUPPORTED_LANGUAGES.join(', ')}`
             });
         }
-        
-        // ========== GET PROBLEM WITH TEST CASES ==========
-        
+
         const problem = await prisma.problem.findUnique({
             where: { id: problemIdInt },
-            include: {
-                testCases: {
-                    orderBy: { id: 'asc' }
-                }
-            }
+            include: { testCases: { orderBy: { id: 'asc' } } }
         });
-        
+
         if (!problem) {
             return res.status(404).json({ error: 'Problem not found' });
         }
-        
+
         if (problem.testCases.length === 0) {
-            return res.status(400).json({ 
-                error: 'Problem has no test cases' 
+            return res.status(400).json({ error: 'Problem has no test cases' });
+        }
+
+        if (isSaturated()) {
+            return res.status(503).json({
+                error: 'Judge is busy. Please try again in a moment.'
             });
         }
-        
-        console.log(`\n=== NEW SUBMISSION ===`);
-        console.log(`User: ${req.user.name} (${req.user.email})`);
-        console.log(`Problem: ${problem.title}`);
-        console.log(`Language: ${language}`);
-        console.log(`Test cases: ${problem.testCases.length}`);
-        
-        // ========== CREATE SUBMISSION RECORD ==========
-        
+
+        if (!tryClaimUser(userId)) {
+            return res.status(409).json({
+                error: 'You already have a submission in progress.'
+            });
+        }
+
+        claimed = true;
+
         const submission = await prisma.submission.create({
             data: {
                 problemId: problemIdInt,
@@ -77,63 +68,64 @@ const submitCode = async (req, res) => {
                 totalTests: problem.testCases.length
             }
         });
-        
-        console.log(`Created submission #${submission.id}`);
-        
-        // ========== RUN CODE AGAINST ALL TEST CASES ==========
-        
+
+        console.log(`Created submission #${submission.id} (${problem.title}, ${language})`);
+
+        judgeSubmission({ submission, problem, code, language, userId })
+            .catch((error) => console.error('Judge run failed:', error))
+            .finally(() => releaseUser(userId));
+
+        claimed = false;
+
+        return res.status(202).json({
+            message: 'Submission queued',
+            submission: {
+                id: submission.id,
+                status: submission.status,
+                totalTests: submission.totalTests,
+                submittedAt: submission.submittedAt
+            }
+        });
+
+    } catch (error) {
+        console.error('Submit code error:', error);
+        return res.status(500).json({ error: 'Server error during submission' });
+    } finally {
+        if (claimed) releaseUser(userId);
+    }
+};
+
+const judgeSubmission = async ({ submission, problem, code, language, userId }) => {
+    try {
+        const testCases = problem.testCases;
+
+        const results = await codeExecutor.executeBatch(
+            code,
+            testCases.map(tc => tc.input),
+            language,
+            5
+        );
+
         let passedCount = 0;
         let overallStatus = 'accepted';
         let totalRuntime = 0;
         const testResults = [];
-        
-        for (let i = 0; i < problem.testCases.length; i++) {
-            const testCase = problem.testCases[i];
-            
-            console.log(`\nRunning test case ${i + 1}/${problem.testCases.length}...`);
-            
-            // Execute code
-            const result = await codeExecutor.executeCode(
-                code,
-                testCase.input,
-                language,
-                5  // 5 second time limit
-            );
-            
-            console.log(`Result: ${result.status}`);
-            
-            // Check if output matches
-            const passed = result.success && 
-                          codeExecutor.compareOutputs(result.output, testCase.expectedOutput);
-            
+
+        for (let i = 0; i < testCases.length; i++) {
+            const testCase = testCases[i];
+            const result = results[i];
+
+            const passed = result.success &&
+                codeExecutor.compareOutputs(result.output, testCase.expectedOutput);
+
             if (passed) {
                 passedCount++;
-                console.log(`✅ Passed`);
-            } else {
-                console.log(`❌ Failed`);
-                
-                // Set overall status to first failure type
-                if (overallStatus === 'accepted') {
-                    if (result.status === 'time_limit_exceeded') {
-                        overallStatus = 'time_limit_exceeded';
-                    } else if (result.status === 'compilation_error') {
-                        overallStatus = 'compilation_error';
-                    } else if (result.status === 'runtime_error') {
-                        overallStatus = 'runtime_error';
-                    } else if (result.status === 'output_limit_exceeded') {
-                        overallStatus = 'output_limit_exceeded';
-                    } else {
-                        overallStatus = 'wrong_answer';
-                    }
-                }
+            } else if (overallStatus === 'accepted') {
+                overallStatus = result.status === 'success' ? 'wrong_answer' : result.status;
             }
-            
-            // Track total runtime
-            if (result.runtime) {
-                totalRuntime += result.runtime;
-            }
-            
-            // Store test result
+
+            if (result.runtime) totalRuntime += result.runtime;
+
             testResults.push({
                 submissionId: submission.id,
                 testCaseId: testCase.id,
@@ -144,212 +136,128 @@ const submitCode = async (req, res) => {
                 error: result.error || null
             });
         }
-        
-        console.log(`\nOverall: ${passedCount}/${problem.testCases.length} passed`);
-        console.log(`Status: ${overallStatus}`);
-        
-        // ========== SAVE ALL TEST RESULTS ==========
-        
-        await prisma.testResult.createMany({
-            data: testResults
+
+        console.log(`Submission #${submission.id}: ${overallStatus} (${passedCount}/${testCases.length})`);
+
+        await persistOutcome({
+            submission,
+            problemId: problem.id,
+            userId,
+            overallStatus,
+            passedCount,
+            totalRuntime,
+            testResults
         });
-        
-        // ========== UPDATE SUBMISSION WITH FINAL STATUS ==========
-        
-        const updatedSubmission = await prisma.submission.update({
+
+    } catch (error) {
+        console.error(`Submission #${submission.id} failed:`, error);
+
+        await prisma.submission
+            .update({
+                where: { id: submission.id },
+                data: { status: 'internal_error' }
+            })
+            .catch((e) => console.error('Could not mark submission failed:', e));
+    }
+};
+
+const persistOutcome = async ({
+    submission, problemId, userId, overallStatus, passedCount, totalRuntime, testResults
+}) => {
+    const isAccepted = overallStatus === 'accepted';
+
+    await prisma.$transaction(async (tx) => {
+        await tx.testResult.createMany({ data: testResults });
+
+        await tx.submission.update({
             where: { id: submission.id },
             data: {
                 status: overallStatus,
                 passedTests: passedCount,
                 runtime: totalRuntime
-            },
-            include: {
-                testResults: {
-                    include: {
-                        testCase: {
-                            select: {
-                                id: true,
-                                input: true,
-                                expectedOutput: true,
-                                isHidden: true
-                            }
-                        }
-                    },
-                    orderBy: { id: 'asc' }
-                }
             }
         });
-        
-        // ========== UPDATE STATISTICS ==========
-        
-        const isAccepted = overallStatus === 'accepted';
-        
-        // Update user stats
-        await prisma.user.update({
+
+        await tx.user.update({
             where: { id: userId },
             data: {
                 totalSubmissions: { increment: 1 },
                 acceptedSubmissions: { increment: isAccepted ? 1 : 0 }
             }
         });
-        
-        // Update problem stats
-        const updatedProblem = await prisma.problem.update({
-            where: { id: problemIdInt },
+
+        const updatedProblem = await tx.problem.update({
+            where: { id: problemId },
             data: {
                 totalSubmissions: { increment: 1 },
                 acceptedSubmissions: { increment: isAccepted ? 1 : 0 }
             }
         });
-        
-        // Calculate new acceptance rate
-        const newAcceptanceRate = updatedProblem.totalSubmissions > 0
-            ? (updatedProblem.acceptedSubmissions / updatedProblem.totalSubmissions) * 100
-            : 0;
-        
-        await prisma.problem.update({
-            where: { id: problemIdInt },
+
+        await tx.problem.update({
+            where: { id: problemId },
             data: {
-                acceptanceRate: newAcceptanceRate
+                acceptanceRate: updatedProblem.totalSubmissions > 0
+                    ? (updatedProblem.acceptedSubmissions / updatedProblem.totalSubmissions) * 100
+                    : 0
             }
         });
-        
-        // ========== UPDATE/CREATE PROBLEM PROGRESS ==========
-        
-        // Check if progress record exists
-        let progress = await prisma.problemProgress.findUnique({
-            where: {
-                userId_problemId: {
-                    userId: userId,
-                    problemId: problemIdInt
-                }
-            }
-        });
-        
-        if (progress) {
-            // Update existing progress
-            const wasSolved = progress.status === 'solved';
-            const nowSolved = isAccepted;
-            
-            progress = await prisma.problemProgress.update({
-                where: {
-                    userId_problemId: {
-                        userId: userId,
-                        problemId: problemIdInt
-                    }
-                },
-                data: {
-                    attempts: { increment: 1 },
-                    acceptedSubmissions: { increment: isAccepted ? 1 : 0 },
-                    status: wasSolved || nowSolved ? 'solved' : 'attempted',  // ← FIXED!
-                    lastAttemptedAt: new Date(),
-                    // Only set solvedAt if newly solved
-                    solvedAt: nowSolved && !wasSolved ? new Date() : progress.solvedAt,
-                    // Update best runtime only if this submission is accepted and faster
-                    bestRuntime: isAccepted && totalRuntime > 0
-                        ? (progress.bestRuntime ? Math.min(progress.bestRuntime, totalRuntime) : totalRuntime)
-                        : progress.bestRuntime
-                }
-            });
-            
-            // If this is first accepted submission, increment problemsSolved
-            if (isAccepted && !wasSolved) {
-                await prisma.user.update({
-                    where: { id: userId },
-                    data: {
-                        problemsSolved: { increment: 1 }
-                    }
-                });
-            }
-            
-        } else {
-            // Create new progress record
-            progress = await prisma.problemProgress.create({
-                data: {
-                    userId: userId,
-                    problemId: problemIdInt,
-                    attempts: 1,
-                    acceptedSubmissions: isAccepted ? 1 : 0,
-                    status: isAccepted ? 'solved' : 'attempted',
-                    lastAttemptedAt: new Date(),
-                    solvedAt: isAccepted ? new Date() : null,
-                    bestRuntime: isAccepted ? totalRuntime : null
-                }
-            });
-            
-            // If accepted on first try, increment problemsSolved
-            if (isAccepted) {
-                await prisma.user.update({
-                    where: { id: userId },
-                    data: {
-                        problemsSolved: { increment: 1 }
-                    }
-                });
-            }
-        }
-        
-        console.log(`Updated stats and progress`);
-        console.log(`=== SUBMISSION COMPLETE ===\n`);
-        
-        // ========== PREPARE RESPONSE (PRIVACY FILTERED) ==========
-        
-        // Filter test results - hide details of hidden test cases that failed
-        const filteredResults = updatedSubmission.testResults.map(tr => {
-            const isHidden = tr.testCase.isHidden;
-            const passed = tr.passed;
-            
-            return {
-                testCaseId: tr.testCaseId,
-                passed: passed,
-                // Show input/output for public tests or passed hidden tests
-                input: !isHidden || passed ? tr.testCase.input : '[Hidden]',
-                userOutput: !isHidden || passed ? tr.userOutput : '[Hidden]',
-                expectedOutput: !isHidden || passed ? tr.expectedOutput : '[Hidden]',
-                runtime: tr.runtime,
-                error: !isHidden || passed ? tr.error : 'Failed hidden test case'
-            };
-        });
-        
-        // ========== RETURN RESPONSE ==========
-        
-        return res.status(201).json({
-            message: 'Code submitted successfully',
-            submission: {
-                id: updatedSubmission.id,
-                status: updatedSubmission.status,
-                passedTests: updatedSubmission.passedTests,
-                totalTests: updatedSubmission.totalTests,
-                runtime: updatedSubmission.runtime,
-                submittedAt: updatedSubmission.submittedAt
+
+        const key = { userId_problemId: { userId: userId, problemId: problemId } };
+        const existing = await tx.problemProgress.findUnique({ where: key });
+        const wasSolved = existing?.status === 'solved';
+
+        await tx.problemProgress.upsert({
+            where: key,
+            create: {
+                userId: userId,
+                problemId: problemId,
+                attempts: 1,
+                acceptedSubmissions: isAccepted ? 1 : 0,
+                status: isAccepted ? 'solved' : 'attempted',
+                lastAttemptedAt: new Date(),
+                solvedAt: isAccepted ? new Date() : null,
+                bestRuntime: isAccepted ? totalRuntime : null
             },
-            testResults: filteredResults,
-            progress: {
-                status: progress.status,
-                attempts: progress.attempts,
-                acceptedSubmissions: progress.acceptedSubmissions,
-                bestRuntime: progress.bestRuntime
+            update: {
+                attempts: { increment: 1 },
+                acceptedSubmissions: { increment: isAccepted ? 1 : 0 },
+                status: wasSolved || isAccepted ? 'solved' : 'attempted',
+                lastAttemptedAt: new Date(),
+                solvedAt: isAccepted && !wasSolved ? new Date() : existing?.solvedAt,
+                bestRuntime: isAccepted && totalRuntime > 0
+                    ? (existing?.bestRuntime
+                        ? Math.min(existing.bestRuntime, totalRuntime)
+                        : totalRuntime)
+                    : existing?.bestRuntime
             }
         });
-        
-    } catch (error) {
-        console.error('Submit code error:', error);
-        return res.status(500).json({ 
-            error: 'Server error during submission',
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
+
+        if (isAccepted && !wasSolved) {
+            await tx.user.update({
+                where: { id: userId },
+                data: { problemsSolved: { increment: 1 } }
+            });
+        }
+    }, { timeout: 15000 });
+};
+
+const sweepStalePendingSubmissions = async () => {
+    const { count } = await prisma.submission.updateMany({
+        where: { status: 'pending' },
+        data: { status: 'internal_error' }
+    });
+
+    if (count > 0) {
+        console.log(`Marked ${count} abandoned pending submission(s) as internal_error`);
     }
 };
 
-/**
- * Get user's own submissions
- * GET /api/submissions?problemId=1&status=accepted&limit=20
- */
 const getUserSubmissions = async (req, res) => {
     try {
         const userId = req.user.id;
         const { problemId, status, limit = 20, offset = 0 } = req.query;
         
-        // Build filter
         const where = {
             userId: userId
         };
@@ -365,7 +273,6 @@ const getUserSubmissions = async (req, res) => {
             where.status = status;
         }
         
-        // Get submissions
         const submissions = await prisma.submission.findMany({
             where: where,
             include: {
@@ -384,7 +291,6 @@ const getUserSubmissions = async (req, res) => {
             skip: parseInt(offset)
         });
         
-        // Get total count
         const total = await prisma.submission.count({ where });
         
         return res.status(200).json({
@@ -414,10 +320,6 @@ const getUserSubmissions = async (req, res) => {
     }
 };
 
-/**
- * Get single submission (user's own only)
- * GET /api/submissions/:id
- */
 const getSubmission = async (req, res) => {
     try {
         const submissionId = parseInt(req.params.id);
@@ -427,7 +329,6 @@ const getSubmission = async (req, res) => {
             return res.status(400).json({ error: 'Invalid submission ID' });
         }
         
-        // Get submission
         const submission = await prisma.submission.findUnique({
             where: { id: submissionId },
             include: {
@@ -459,14 +360,12 @@ const getSubmission = async (req, res) => {
             return res.status(404).json({ error: 'Submission not found' });
         }
         
-        // Check ownership - users can only see their own submissions
         if (submission.userId !== userId) {
             return res.status(403).json({ 
                 error: 'Access denied. You can only view your own submissions.' 
             });
         }
         
-        // Filter test results for privacy
         const filteredResults = submission.testResults.map(tr => {
             const isHidden = tr.testCase.isHidden;
             const passed = tr.passed;
@@ -474,11 +373,11 @@ const getSubmission = async (req, res) => {
             return {
                 testCaseId: tr.testCaseId,
                 passed: passed,
-                input: !isHidden || passed ? tr.testCase.input : '[Hidden]',
-                userOutput: !isHidden || passed ? tr.userOutput : '[Hidden]',
-                expectedOutput: !isHidden || passed ? tr.expectedOutput : '[Hidden]',
+                input: isHidden ? '[Hidden]' : tr.testCase.input,
+                userOutput: isHidden ? '[Hidden]' : tr.userOutput,
+                expectedOutput: isHidden ? '[Hidden]' : tr.expectedOutput,
                 runtime: tr.runtime,
-                error: !isHidden || passed ? tr.error : 'Failed hidden test case'
+                error: isHidden ? (passed ? null : 'Failed hidden test case') : tr.error
             };
         });
         
@@ -508,5 +407,6 @@ const getSubmission = async (req, res) => {
 export {
     submitCode,
     getUserSubmissions,
-    getSubmission
+    getSubmission,
+    sweepStalePendingSubmissions
 };
