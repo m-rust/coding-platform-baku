@@ -1,0 +1,11 @@
+# Caddy terminates TLS and forwards to the API on localhost.
+# Certificates are obtained and renewed from Let's Encrypt automatically —
+# the only requirement is that this hostname resolves to this machine.
+
+REPLACE-ME.duckdns.org {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:5000 {
+		header_up X-Real-IP {remote_host}
+	}
+}

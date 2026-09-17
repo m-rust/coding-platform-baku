@@ -1,0 +1,26 @@
+[Unit]
+Description=Baku API and judge
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=baku
+WorkingDirectory=/opt/baku/backend
+EnvironmentFile=/opt/baku/backend/.env
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=5
+
+# The judge writes submissions under the system temp directory and shells out
+# to the docker CLI, so this service cannot be fully sandboxed from the host.
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=false
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=baku-api
+
+[Install]
+WantedBy=multi-user.target
