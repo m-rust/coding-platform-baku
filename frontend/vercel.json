@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://REPLACE-ME.duckdns.org/api/:path*"
+      "destination": "https://baku-api.duckdns.org/api/:path*"
     },
     {
       "source": "/((?!api/).*)",
