@@ -6,4 +6,3 @@ node_modules
 
 src/test/
 scripts/
-prisma/migrations/
