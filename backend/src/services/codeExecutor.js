@@ -12,6 +12,9 @@ const MARKER = '__JUDGE__';
 const COMPILE_TIME_LIMIT = 10;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 
+const RUN_MEMORY = process.env.JUDGE_RUN_MEMORY || '256m';
+const COMPILE_MEMORY = process.env.JUDGE_COMPILE_MEMORY || '512m';
+
 const OUTPUT_BLOCK_LIMIT = MAX_OUTPUT_BYTES / 512;
 
 export const LANGUAGES = {
@@ -145,7 +148,7 @@ class CodeExecutor {
         const result = await this.runContainer({
             image: config.image,
             mounts: [{ host: mount, target: '/app' }],
-            memory: '512m',
+            memory: COMPILE_MEMORY,
             timeLimit: COMPILE_TIME_LIMIT,
             script: wrapCommand(config.compile, COMPILE_TIME_LIMIT),
         });
@@ -268,7 +271,7 @@ class CodeExecutor {
         };
     }
 
-    async runContainer({ image, mounts, script, timeLimit, memory = '256m', expectMarker = true }) {
+    async runContainer({ image, mounts, script, timeLimit, memory = RUN_MEMORY, expectMarker = true }) {
         const name = `judge-${uuidv4()}`;
 
         await acquire();

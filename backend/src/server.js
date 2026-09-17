@@ -13,6 +13,8 @@ const app = express();
 const port = process.env.PORT || 5000;
 const allowedOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
 
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS) || 0);
+
 app.use(cookieParser());
 
 app.use((req, res, next) => {
