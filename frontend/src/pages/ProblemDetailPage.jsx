@@ -76,9 +76,33 @@ const ProblemDetailPage = () => {
       description: problem.description,
       difficulty: (problem.difficulty || 'easy').toLowerCase(),
       tagsInput: (problem.tags || []).join(', '),
+      testCases: (problem.testCases || []).map(tc => ({
+        id: tc.id,
+        input: tc.input,
+        expectedOutput: tc.expectedOutput,
+        isHidden: Boolean(tc.isHidden),
+      })),
     });
     setIsEditing(true);
   };
+
+  const updateTC = (i, patch) =>
+    setEditForm(prev => ({
+      ...prev,
+      testCases: prev.testCases.map((tc, j) => (j === i ? { ...tc, ...patch } : tc)),
+    }));
+
+  const addTC = () =>
+    setEditForm(prev => ({
+      ...prev,
+      testCases: [...prev.testCases, { input: '', expectedOutput: '', isHidden: false }],
+    }));
+
+  const removeTC = (i) =>
+    setEditForm(prev => ({
+      ...prev,
+      testCases: prev.testCases.filter((_, j) => j !== i),
+    }));
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -86,14 +110,42 @@ const ProblemDetailPage = () => {
 
     setIsSaving(true);
     try {
-      const res = await api.patch(`/problems/${id}`, {
+      await api.patch(`/problems/${id}`, {
         title: editForm.title.trim(),
         description: editForm.description.trim(),
         difficulty: editForm.difficulty,
         tags: editForm.tagsInput.split(',').map((t) => t.trim()).filter(Boolean),
       });
 
-      setProblem((prev) => ({ ...prev, ...res.data.problem }));
+      const original = problem.testCases || [];
+      const kept = editForm.testCases.filter(tc => tc.id).map(tc => tc.id);
+
+      // ponytail: one request per changed test case. A bulk endpoint only pays
+      // off if problems grow past a handful of them.
+      for (const tc of original.filter(tc => !kept.includes(tc.id))) {
+        await api.delete(`/problems/${id}/testcases/${tc.id}`);
+      }
+
+      for (const tc of editForm.testCases) {
+        const body = {
+          input: tc.input.trim(),
+          expectedOutput: tc.expectedOutput.trim(),
+          isHidden: tc.isHidden,
+        };
+        if (!tc.id) {
+          await api.post(`/problems/${id}/testcases`, body);
+          continue;
+        }
+        const before = original.find(o => o.id === tc.id);
+        const unchanged = before
+          && before.input === body.input
+          && before.expectedOutput === body.expectedOutput
+          && Boolean(before.isHidden) === body.isHidden;
+        if (!unchanged) await api.patch(`/problems/${id}/testcases/${tc.id}`, body);
+      }
+
+      const fresh = await api.get(`/problems/${id}`);
+      setProblem(fresh.data.problem);
       setIsEditing(false);
       toast.success('Problem updated');
     } catch (err) {
@@ -198,6 +250,11 @@ const ProblemDetailPage = () => {
   const difficulty  = problem.difficulty?.toLowerCase() || 'easy';
   const diffStyle   = difficultyConfig[difficulty] || difficultyConfig.easy;
   const visibleTCs  = (problem.testCases || []).filter(tc => !tc.isHidden);
+  // Most descriptions already spell out the examples; showing the sample test
+  // cases as well renders them twice.
+  // ponytail: matches "Example" only at the start of a line, so "for example"
+  // mid-sentence does not hide the block. Tighten only if that proves too loose.
+  const descHasExamples = /(^|\n)\s*#{0,6}\s*\**example\b/i.test(problem.description || '');
   const statusColor = submission ? (statusColors[submission.status] || 'text-slate-200') : '';
 
   return (
@@ -275,6 +332,68 @@ const ProblemDetailPage = () => {
                       rows={10}
                       className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-medium text-slate-400">Test cases</label>
+                      <button
+                        type="button"
+                        onClick={addTC}
+                        className="px-2 py-0.5 rounded-md border border-slate-700 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-slate-50"
+                      >
+                        Add
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {editForm.testCases.length === 0 && (
+                        <p className="text-xs text-slate-500">No test cases. Submissions cannot be judged without at least one.</p>
+                      )}
+
+                      {editForm.testCases.map((tc, i) => (
+                        <div key={tc.id ?? `new-${i}`} className="rounded-lg border border-slate-800 bg-slate-900 p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-medium text-slate-400">Test case {i + 1}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeTC(i)}
+                              className="text-xs text-rose-400 hover:text-rose-300"
+                            >
+                              Remove
+                            </button>
+                          </div>
+
+                          <textarea
+                            value={tc.input}
+                            onChange={e => updateTC(i, { input: e.target.value })}
+                            required
+                            rows={2}
+                            placeholder="Input"
+                            className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-2 text-sm font-mono text-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+
+                          <textarea
+                            value={tc.expectedOutput}
+                            onChange={e => updateTC(i, { expectedOutput: e.target.value })}
+                            required
+                            rows={2}
+                            placeholder="Expected output"
+                            className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-2 text-sm font-mono text-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+
+                          <label className="flex items-center gap-2 text-xs text-slate-400">
+                            <input
+                              type="checkbox"
+                              checked={tc.isHidden}
+                              onChange={e => updateTC(i, { isHidden: e.target.checked })}
+                              className="accent-indigo-500"
+                            />
+                            Hidden (not shown to solvers)
+                          </label>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
                   <div className="flex gap-2">
@@ -366,7 +485,7 @@ const ProblemDetailPage = () => {
                 </>
               )}
 
-              {visibleTCs.length > 0 && (
+              {visibleTCs.length > 0 && !descHasExamples && (
                 <>
                   <hr className="border-slate-800" />
                   <div>
