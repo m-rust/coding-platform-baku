@@ -1,4 +1,5 @@
 import prisma from '../../db.js';
+import { toCodeforcesInput, toCodeforcesOutput } from '../services/toCodeforces.js';
 
 const createProblem = async (req,res) => {
     try{
@@ -13,8 +14,8 @@ const createProblem = async (req,res) => {
                 createdById : req.user.id,
                 testCases : {
                     create : testCases.map(tc => ({
-                        input: tc.input.trim(),
-                        expectedOutput: tc.expectedOutput.trim(),
+                        input: toCodeforcesInput(tc.input),
+                        expectedOutput: toCodeforcesOutput(tc.expectedOutput),
                         isHidden: tc.isHidden || false
                     }))
                 }
@@ -124,7 +125,6 @@ const getProblem = async(req,res) => {
         if(!currProblem){
             return res.status(404).json({error : "This problem doesn't exist"});
         }
-
         return res.json({problem : currProblem});
 
     }

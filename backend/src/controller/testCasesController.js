@@ -1,4 +1,5 @@
 import prisma from '../../db.js';
+import { toCodeforcesInput, toCodeforcesOutput } from '../services/toCodeforces.js';
 
 const createTestCase = async (req,res) => {
     try{
@@ -20,8 +21,8 @@ const createTestCase = async (req,res) => {
     
         const testCase = await prisma.testCase.create({
             data : {
-                input,
-                expectedOutput,
+                input: toCodeforcesInput(input),
+                expectedOutput: toCodeforcesOutput(expectedOutput),
                 isHidden : (isHidden ?? false),
                 problemId
             }
@@ -68,7 +69,7 @@ const updateTestCase = async (req, res) => {
                     error: "Input cannot be empty" 
                 });
             }
-            updateData.input = input.trim();
+            updateData.input = toCodeforcesInput(input);
         }
         
         if (expectedOutput !== undefined) {
@@ -77,7 +78,7 @@ const updateTestCase = async (req, res) => {
                     error: "Expected output cannot be empty" 
                 });
             }
-            updateData.expectedOutput = expectedOutput.trim();
+            updateData.expectedOutput = toCodeforcesOutput(expectedOutput);
         }
         
         if (isHidden !== undefined) {
