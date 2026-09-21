@@ -44,7 +44,10 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    if (!error.response || error.response.status !== 401 || originalRequest._retry) {
+    // A 401 from login/register means bad credentials, not an expired token
+    const isAuthCall = /\/auth\/(login|register)$/.test(originalRequest?.url ?? '');
+
+    if (!error.response || error.response.status !== 401 || originalRequest._retry || isAuthCall) {
       return Promise.reject(error);
     }
 

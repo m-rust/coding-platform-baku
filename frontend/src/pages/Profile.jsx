@@ -1,8 +1,26 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../services/api.js';
 import LoadingSpinner from '../components/common/LoadingSpinner.jsx';
 
+const TABS = ['Solved', 'Submissions', 'Created'];
+
+const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+const UNITS = [['year', 31536000], ['month', 2592000], ['day', 86400], ['hour', 3600], ['minute', 60]];
+
+const timeAgo = (date) => {
+  const secs = (new Date(date) - Date.now()) / 1000;
+  const [unit, size] = UNITS.find(([, n]) => Math.abs(secs) >= n) || ['second', 1];
+  return rtf.format(Math.round(secs / size), unit);
+};
+
+const statusColor = (status) =>
+  status === 'accepted' ? 'text-emerald-400' : status === 'pending' ? 'text-amber-400' : 'text-rose-400';
+
 const Profile = () => {
+  const [activeTab, setActiveTab] = useState('Solved');
+  const [solved, setSolved] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
   const [stats, setStats] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -12,8 +30,18 @@ const Profile = () => {
       setIsLoading(true);
       setError('');
       try {
-        const response = await api.get('/users/me/stats');
-        setStats(response.data);
+        const [statsRes, progressRes, submissionsRes] = await Promise.all([
+          api.get('/users/me/stats'),
+          api.get('/users/me/progress', { params: { status: 'solved' } }),
+          api.get('/submissions', { params: { limit: 50 } }),
+        ]);
+        setStats(statsRes.data);
+        setSolved(
+          [...progressRes.data.progress].sort(
+            (a, b) => new Date(b.solvedAt ?? b.lastAttemptedAt) - new Date(a.solvedAt ?? a.lastAttemptedAt)
+          )
+        );
+        setSubmissions(submissionsRes.data.submissions);
       } catch (err) {
         const message =
           err.response?.data?.error ||
@@ -42,7 +70,34 @@ const Profile = () => {
     return null;
   }
 
-  const { user, statistics, problemsByDifficulty, languageStats } = stats;
+  const { user, statistics, problemsByDifficulty, languageStats, createdProblems = [] } = stats;
+
+  const rows = {
+    Solved: solved.map((p) => ({
+      key: p.problemId,
+      problemId: p.problemId,
+      title: p.problemTitle,
+      when: p.solvedAt ?? p.lastAttemptedAt,
+    })),
+    Submissions: submissions.map((s) => ({
+      key: s.id,
+      problemId: s.problemId,
+      title: s.problemTitle,
+      when: s.submittedAt,
+      extra: (
+        <span className={`text-xs font-medium ${statusColor(s.status)}`}>
+          {s.status.replace(/_/g, ' ')} · {s.language}
+        </span>
+      ),
+    })),
+    Created: createdProblems.map((p) => ({
+      key: p.id,
+      problemId: p.id,
+      title: p.title,
+      when: p.createdAt,
+      extra: <span className="text-xs text-slate-400 capitalize">{p.difficulty}</span>,
+    })),
+  }[activeTab];
 
   return (
     <div className="space-y-6">
@@ -98,6 +153,48 @@ const Profile = () => {
             <li>C++: {languageStats.cpp}</li>
           </ul>
         </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4">
+        <div className="flex gap-2 mb-3">
+          {TABS.map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeTab === tab
+                  ? 'bg-slate-800 text-slate-50'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        {rows.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-slate-500">Nothing here yet.</p>
+        ) : (
+          <ul>
+            {rows.map((row, i) => (
+              <li key={row.key}>
+                <Link
+                  to={`/problems/${row.problemId}`}
+                  className={`flex items-center justify-between gap-4 px-4 py-3 rounded-md hover:bg-slate-700/50 ${
+                    i % 2 === 0 ? 'bg-slate-800/60' : ''
+                  }`}
+                >
+                  <span className="text-sm text-slate-100 truncate">{row.title}</span>
+                  <span className="flex shrink-0 items-center gap-4">
+                    {row.extra}
+                    <span className="text-sm text-slate-400">{timeAgo(row.when)}</span>
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

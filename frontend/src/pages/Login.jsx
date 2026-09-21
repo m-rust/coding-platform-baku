@@ -45,7 +45,17 @@ const Login = () => {
   };
 
   return (
-    <div className="max-w-md mx-auto bg-slate-900/80 border border-slate-800 rounded-xl p-6 shadow-lg">
+    <div className="grid gap-10 md:grid-cols-2 md:items-center md:py-12">
+    <div className="space-y-4">
+      <h1 className="text-3xl md:text-4xl font-bold text-slate-50 leading-tight">
+        Build and solve programming problems.
+      </h1>
+      <p className="text-slate-400">
+        Write your own challenges with test cases, solve problems in Python or C++,
+        and get instant feedback from a sandboxed judge.
+      </p>
+    </div>
+    <div className="w-full max-w-md mx-auto bg-slate-900/80 border border-slate-800 rounded-xl p-6 shadow-lg">
       <h2 className="text-xl font-semibold text-slate-50 mb-4">
         Log in to your account
       </h2>
@@ -94,6 +104,7 @@ const Login = () => {
           Sign up
         </Link>
       </p>
+    </div>
     </div>
   );
 };

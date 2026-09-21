@@ -1,11 +1,10 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Outlet, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import api from './services/api.js';
 import { useAuthStore } from './store/authStore.js';
 import './App.css';
 import Navbar from './components/common/Navbar.jsx';
-import Home from './pages/Home.jsx';
 import Login from './pages/Login.jsx';
 import Register from './pages/Register.jsx';
 import Problems from './pages/Problems.jsx';
@@ -24,6 +23,7 @@ const StandardLayout = () => (
 
 function App() {
   const isBootstrapped = useAuthStore((state) => state.isBootstrapped);
+  const user = useAuthStore((state) => state.user);
 
   useEffect(() => {
     if (isBootstrapped) return;
@@ -52,7 +52,7 @@ function App() {
           </Route>
 
           <Route element={<StandardLayout />}>
-            <Route path="/" element={<Home />} />
+            <Route path="/" element={user ? <Navigate to="/problems" replace /> : <Login />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route element={<ProtectedRoute />}>

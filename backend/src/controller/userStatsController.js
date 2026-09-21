@@ -95,6 +95,12 @@ const getUserStats = async (req, res) => {
             take: 5
         });
         
+        const createdProblems = await prisma.problem.findMany({
+            where: { createdById: userId },
+            select: { id: true, title: true, difficulty: true, createdAt: true },
+            orderBy: { createdAt: 'desc' }
+        });
+        
         return res.status(200).json({
             user: {
                 id: user.id,
@@ -129,7 +135,8 @@ const getUserStats = async (req, res) => {
                 problemTitle: pr.problem.title,
                 problemDifficulty: pr.problem.difficulty,
                 runtime: pr.bestRuntime
-            }))
+            })),
+            createdProblems
         });
         
     } catch (error) {

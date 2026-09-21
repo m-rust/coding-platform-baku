@@ -3,60 +3,145 @@ import prisma from '../../db.js'
 import codeExecutor, { SUPPORTED_LANGUAGES } from '../services/codeExecutor.js';
 import { isSaturated, tryClaimUser, releaseUser } from '../services/judgeQueue.js';
 
+// Shared by submit and run: validates the request, then claims a judge slot
+// for the user. Returns { problem } on success (slot claimed; caller must
+// releaseUser), or { status, error }.
+const prepareJudging = async (body, userId) => {
+    const { problemId, code, language } = body;
+
+    if (!problemId || !code || !language) {
+        return { status: 400, error: 'Problem ID, code, and language are required' };
+    }
+
+    const problemIdInt = parseInt(problemId);
+    if (isNaN(problemIdInt)) {
+        return { status: 400, error: 'Invalid problem ID' };
+    }
+
+    if (code.trim() === '') {
+        return { status: 400, error: 'Code cannot be empty' };
+    }
+
+    if (!SUPPORTED_LANGUAGES.includes(language)) {
+        return { status: 400, error: `Language must be one of: ${SUPPORTED_LANGUAGES.join(', ')}` };
+    }
+
+    const problem = await prisma.problem.findUnique({
+        where: { id: problemIdInt },
+        include: { testCases: { orderBy: { id: 'asc' } } }
+    });
+
+    if (!problem) {
+        return { status: 404, error: 'Problem not found' };
+    }
+
+    if (problem.testCases.length === 0) {
+        return { status: 400, error: 'Problem has no test cases' };
+    }
+
+    if (isSaturated()) {
+        return { status: 503, error: 'Judge is busy. Please try again in a moment.' };
+    }
+
+    if (!tryClaimUser(userId)) {
+        return { status: 409, error: 'You already have a submission in progress.' };
+    }
+
+    return { problem };
+};
+
+const gradeResults = (testCases, results) => {
+    let passedCount = 0;
+    let overallStatus = 'accepted';
+    let totalRuntime = 0;
+
+    const graded = testCases.map((testCase, i) => {
+        const result = results[i];
+        const passed = result.success &&
+            codeExecutor.compareOutputs(result.output, testCase.expectedOutput);
+
+        if (passed) {
+            passedCount++;
+        } else if (overallStatus === 'accepted') {
+            overallStatus = result.status === 'success' ? 'wrong_answer' : result.status;
+        }
+
+        if (result.runtime) totalRuntime += result.runtime;
+
+        return {
+            testCaseId: testCase.id,
+            passed: passed,
+            userOutput: result.output || null,
+            expectedOutput: testCase.expectedOutput,
+            runtime: result.runtime || null,
+            error: result.error || null
+        };
+    });
+
+    return { overallStatus, passedCount, totalRuntime, graded };
+};
+
+// Runs only the visible test cases and returns the result directly;
+// nothing is written to the database.
+const runCode = async (req, res) => {
+    const userId = req.user.id;
+    let claimed = false;
+
+    try {
+        const prepared = await prepareJudging(req.body, userId);
+        if (prepared.error) {
+            return res.status(prepared.status).json({ error: prepared.error });
+        }
+        claimed = true;
+
+        const { code, language } = req.body;
+        const testCases = prepared.problem.testCases.filter(tc => !tc.isHidden);
+
+        if (testCases.length === 0) {
+            return res.status(400).json({ error: 'Problem has no visible test cases' });
+        }
+
+        const results = await codeExecutor.executeBatch(
+            code,
+            testCases.map(tc => tc.input),
+            language,
+            5
+        );
+
+        const { overallStatus, passedCount, totalRuntime, graded } = gradeResults(testCases, results);
+
+        return res.status(200).json({
+            submission: {
+                status: overallStatus,
+                passedTests: passedCount,
+                totalTests: testCases.length,
+                runtime: totalRuntime
+            },
+            testResults: graded.map((g, i) => ({ ...g, input: testCases[i].input }))
+        });
+
+    } catch (error) {
+        console.error('Run code error:', error);
+        return res.status(500).json({ error: 'Server error while running code' });
+    } finally {
+        if (claimed) releaseUser(userId);
+    }
+};
+
 const submitCode = async (req, res) => {
     const userId = req.user.id;
     let claimed = false;
 
     try {
-        const { problemId, code, language } = req.body;
-
-        if (!problemId || !code || !language) {
-            return res.status(400).json({
-                error: 'Problem ID, code, and language are required'
-            });
+        const prepared = await prepareJudging(req.body, userId);
+        if (prepared.error) {
+            return res.status(prepared.status).json({ error: prepared.error });
         }
-
-        const problemIdInt = parseInt(problemId);
-        if (isNaN(problemIdInt)) {
-            return res.status(400).json({ error: 'Invalid problem ID' });
-        }
-
-        if (code.trim() === '') {
-            return res.status(400).json({ error: 'Code cannot be empty' });
-        }
-
-        if (!SUPPORTED_LANGUAGES.includes(language)) {
-            return res.status(400).json({
-                error: `Language must be one of: ${SUPPORTED_LANGUAGES.join(', ')}`
-            });
-        }
-
-        const problem = await prisma.problem.findUnique({
-            where: { id: problemIdInt },
-            include: { testCases: { orderBy: { id: 'asc' } } }
-        });
-
-        if (!problem) {
-            return res.status(404).json({ error: 'Problem not found' });
-        }
-
-        if (problem.testCases.length === 0) {
-            return res.status(400).json({ error: 'Problem has no test cases' });
-        }
-
-        if (isSaturated()) {
-            return res.status(503).json({
-                error: 'Judge is busy. Please try again in a moment.'
-            });
-        }
-
-        if (!tryClaimUser(userId)) {
-            return res.status(409).json({
-                error: 'You already have a submission in progress.'
-            });
-        }
-
         claimed = true;
+
+        const { problemId, code, language } = req.body;
+        const problemIdInt = parseInt(problemId);
+        const { problem } = prepared;
 
         const submission = await prisma.submission.create({
             data: {
@@ -106,36 +191,8 @@ const judgeSubmission = async ({ submission, problem, code, language, userId }) 
             5
         );
 
-        let passedCount = 0;
-        let overallStatus = 'accepted';
-        let totalRuntime = 0;
-        const testResults = [];
-
-        for (let i = 0; i < testCases.length; i++) {
-            const testCase = testCases[i];
-            const result = results[i];
-
-            const passed = result.success &&
-                codeExecutor.compareOutputs(result.output, testCase.expectedOutput);
-
-            if (passed) {
-                passedCount++;
-            } else if (overallStatus === 'accepted') {
-                overallStatus = result.status === 'success' ? 'wrong_answer' : result.status;
-            }
-
-            if (result.runtime) totalRuntime += result.runtime;
-
-            testResults.push({
-                submissionId: submission.id,
-                testCaseId: testCase.id,
-                passed: passed,
-                userOutput: result.output || null,
-                expectedOutput: testCase.expectedOutput,
-                runtime: result.runtime || null,
-                error: result.error || null
-            });
-        }
+        const { overallStatus, passedCount, totalRuntime, graded } = gradeResults(testCases, results);
+        const testResults = graded.map(g => ({ ...g, submissionId: submission.id }));
 
         console.log(`Submission #${submission.id}: ${overallStatus} (${passedCount}/${testCases.length})`);
 
@@ -406,6 +463,7 @@ const getSubmission = async (req, res) => {
 
 export {
     submitCode,
+    runCode,
     getUserSubmissions,
     getSubmission,
     sweepStalePendingSubmissions

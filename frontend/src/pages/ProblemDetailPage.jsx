@@ -8,6 +8,9 @@ import OutputDiff from '../components/editor/OutputDiff.jsx';
 import api from '../services/api.js';
 import { useAuthStore } from '../store/authStore.js';
 import LoadingSpinner from '../components/common/LoadingSpinner.jsx';
+import lightModeIcon from '../assets/light-mode.png';
+import darkModeIcon from '../assets/dark-mode.png';
+import resetIcon from '../assets/reset.png';
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'];
 
@@ -54,7 +57,8 @@ const ProblemDetailPage = () => {
   const code = codeByLanguage[language] ?? '';
   const setCode = (value) =>
     setCodeByLanguage((prev) => ({ ...prev, [language]: value }));
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // 'run' | 'submit' | null — which action is in flight
+  const [busy, setBusy] = useState(null);
   const [submission, setSubmission]     = useState(null);
   const [testResults, setTestResults]   = useState([]);
 
@@ -67,6 +71,16 @@ const ProblemDetailPage = () => {
   const [editForm, setEditForm]   = useState(null);
   const [isSaving, setIsSaving]   = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDark, setIsDark] = useState(() => {
+    try { return localStorage.getItem('problemTheme') === 'dark'; } catch { return false; }
+  });
+
+  const toggleTheme = () => {
+    setIsDark(d => {
+      try { localStorage.setItem('problemTheme', d ? 'light' : 'dark'); } catch { /* storage blocked */ }
+      return !d;
+    });
+  };
 
   const isOwner = Boolean(currentUser && problem?.createdBy?.id === currentUser.id);
 
@@ -173,11 +187,13 @@ const ProblemDetailPage = () => {
   };
 
   useEffect(() => {
+    let ignore = false;
     const fetchProblem = async () => {
       setIsLoading(true);
       setError('');
       try {
         const res = await api.get(`/problems/${id}`);
+        if(ignore)  return;
         setProblem(res.data.problem);
       } catch (err) {
         setError(err.response?.data?.error || err.message || 'Failed to load problem');
@@ -186,9 +202,37 @@ const ProblemDetailPage = () => {
       }
     };
     fetchProblem();
+
+    return () => {ignore = true};
   }, [id]);
 
   const handleLanguageChange = (lang) => setLanguage(lang);
+
+  const [history, setHistory] = useState(null);
+
+  // Refetches when the tab opens and after each judged submission.
+  useEffect(() => {
+    if (activeTab !== 'Submissions') return;
+    let ignore = false;
+    // ponytail: one big page, add pagination if a user racks up >1000 submissions on one problem
+    api
+      .get('/submissions', { params: { problemId: id, limit: 1000 } })
+      .then((res) => { if (!ignore) setHistory(res.data.submissions); })
+      .catch(() => { if (!ignore) setHistory([]); });
+    return () => { ignore = true; };
+  }, [activeTab, id, submission]);
+
+  const loadSubmission = async (subId) => {
+    try {
+      const res = await api.get(`/submissions/${subId}`);
+      const { code: oldCode, language: oldLang } = res.data.submission;
+      setCodeByLanguage((prev) => ({ ...prev, [oldLang]: oldCode }));
+      setLanguage(oldLang);
+      toast.success('Loaded submission into the editor');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load submission');
+    }
+  };
 
   useEffect(() => {
     api
@@ -199,10 +243,29 @@ const ProblemDetailPage = () => {
       .catch(() => {});
   }, []);
 
-  const handleSubmit = async () => {
-    if (isSubmitting) return;
+  // Runs only the visible test cases; the server stores nothing.
+  const handleRun = async () => {
+    if (busy) return;
 
-    setIsSubmitting(true);
+    setBusy('run');
+    setSubmission(null);
+    setTestResults([]);
+
+    try {
+      const res = await api.post('/submissions/run', { problemId: Number(id), code, language });
+      setSubmission(res.data.submission);
+      setTestResults(res.data.testResults || []);
+    } catch (err) {
+      toast.error(err.response?.data?.error || err.message || 'Run failed');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (busy) return;
+
+    setBusy('submit');
     setSubmission(null);
     setTestResults([]);
 
@@ -231,7 +294,7 @@ const ProblemDetailPage = () => {
     } catch (err) {
       toast.error(err.response?.data?.error || err.message || 'Submission failed');
     } finally {
-      setIsSubmitting(false);
+      setBusy(null);
     }
   };
 
@@ -258,7 +321,7 @@ const ProblemDetailPage = () => {
   const statusColor = submission ? (statusColors[submission.status] || 'text-slate-200') : '';
 
   return (
-    <div className="flex-1 flex overflow-hidden">
+    <div className={`flex-1 flex overflow-hidden bg-slate-950 text-slate-50 ${isDark ? 'dark' : ''}`}>
 
       <div className="w-[38%] min-w-[280px] flex flex-col border-r border-slate-800 overflow-hidden bg-slate-900/30">
 
@@ -524,23 +587,37 @@ const ProblemDetailPage = () => {
           )}
 
           {activeTab === 'Submissions' && (
-            <div className="space-y-3">
-              {!submission ? (
-                <p className="text-sm text-slate-500">No submissions yet in this session.</p>
+            <div className="space-y-2">
+              {history === null ? (
+                <LoadingSpinner />
+              ) : history.length === 0 ? (
+                <p className="text-sm text-slate-500">You haven&apos;t submitted this problem yet.</p>
               ) : (
-                <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className={`text-sm font-semibold ${statusColor}`}>
-                      {submission.status.replace(/_/g, ' ').toUpperCase()}
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      {submission.passedTests}/{submission.totalTests} passed · {submission.runtime}ms
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-500 font-mono">
-                    {language.toUpperCase()}
-                  </div>
-                </div>
+                history.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => loadSubmission(s.id)}
+                    title="Load this code into the editor"
+                    className="w-full text-left rounded-lg border border-slate-800 bg-slate-900 p-3 space-y-1 hover:border-slate-700"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className={`text-sm font-semibold ${statusColors[s.status] || 'text-slate-200'}`}>
+                        {s.status.replace(/_/g, ' ').toUpperCase()}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {new Date(s.submittedAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-slate-500">
+                      <span className="font-mono">{s.language.toUpperCase()}</span>
+                      <span>
+                        {s.passedTests}/{s.totalTests} passed
+                        {s.runtime != null && ` · ${s.runtime}ms`}
+                      </span>
+                    </div>
+                  </button>
+                ))
               )}
             </div>
           )}
@@ -567,16 +644,54 @@ const ProblemDetailPage = () => {
             ))}
           </div>
 
+          <div className="flex items-center gap-2">
           <button
+            type="button"
+            onClick={() => {
+              if (window.confirm('Reset your code to the starter template? Your current code will be lost.')) {
+                setCode(defaultStarterCode[language] ?? '');
+              }
+            }}
+            title="Reset code"
+            aria-label="Reset code"
+            className="p-1.5 rounded-md border border-slate-700 hover:bg-slate-800"
+          >
+            <img src={resetIcon} alt="" className={`h-4 w-4 ${isDark ? 'invert' : ''}`} />
+          </button>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={isDark ? 'Light mode' : 'Dark mode'}
+            aria-label={isDark ? 'Light mode' : 'Dark mode'}
+            className="p-1.5 rounded-md border border-slate-700 hover:bg-slate-800"
+          >
+            <img src={isDark ? lightModeIcon : darkModeIcon} alt="" className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={handleRun}
+            disabled={Boolean(busy)}
+            title="Run against the sample test cases"
+            className="flex items-center gap-2 px-4 py-1.5 rounded-md border border-slate-700 text-slate-200 text-sm font-medium hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {busy === 'run' && (
+              <span className="h-3.5 w-3.5 rounded-full border-2 border-slate-600 border-t-slate-200 animate-spin" />
+            )}
+            {busy === 'run' ? 'Running…' : 'Run Code'}
+          </button>
+          <button
+            type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting}
+            disabled={Boolean(busy)}
+            title="Judge against all test cases"
             className="flex items-center gap-2 px-4 py-1.5 rounded-md bg-indigo-500 text-white text-sm font-medium hover:bg-indigo-400 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            {isSubmitting && (
+            {busy === 'submit' && (
               <span className="h-3.5 w-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
             )}
-            {isSubmitting ? 'Running…' : 'Run Code'}
+            {busy === 'submit' ? 'Submitting…' : 'Submit'}
           </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-hidden">
@@ -584,7 +699,7 @@ const ProblemDetailPage = () => {
             height="100%"
             language={language}
             value={code}
-            theme="vs-dark"
+            theme={isDark ? 'vs-dark' : 'vs'}
             onChange={(val) => setCode(val ?? '')}
             options={{
               minimap: { enabled: false },
