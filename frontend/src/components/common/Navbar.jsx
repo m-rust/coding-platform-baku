@@ -13,25 +13,25 @@ const Navbar = () => {
 
     clearAuth();
     toast.success('Logged out');
-    navigate('/login');
+    navigate('/');
   };
 
   const linkClass = ({ isActive }) =>
     `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
       isActive
-        ? 'bg-slate-800 text-white'
-        : 'text-slate-300 hover:text-white hover:bg-slate-800'
+        ? 'bg-white/10 text-white'
+        : 'text-[#b7c9cc] hover:text-white hover:bg-white/10'
     }`;
 
   return (
-    <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur">
+    <header className="bg-[#0e141e]">
       <nav className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link to="/" className="flex items-center gap-2">
-            <span className="h-8 w-8 rounded bg-indigo-500 flex items-center justify-center text-sm font-bold">
+            <span className="h-8 w-8 rounded bg-indigo-500 flex items-center justify-center text-sm font-bold text-white">
               BK
             </span>
-            <span className="font-semibold text-slate-50">
+            <span className="font-semibold text-white">
               Baku
             </span>
           </Link>
@@ -43,9 +43,6 @@ const Navbar = () => {
               <NavLink to="/problems" className={linkClass}>
                 Problems
               </NavLink>
-              <NavLink to="/problems/new" className={linkClass}>
-                Create problem
-              </NavLink>
               <NavLink to="/profile" className={linkClass}>
                 Profile
               </NavLink>
@@ -55,8 +52,8 @@ const Navbar = () => {
           {!isAuthenticated ? (
             <>
               <Link
-                to="/login"
-                className="px-3 py-1.5 text-sm font-medium text-slate-200 hover:text-white"
+                to="/"
+                className="px-3 py-1.5 text-sm font-medium text-[#b7c9cc] hover:text-white"
               >
                 Log in
               </Link>
@@ -71,7 +68,7 @@ const Navbar = () => {
             <button
               type="button"
               onClick={handleLogout}
-              className="px-3 py-1.5 text-sm font-medium rounded-md border border-slate-600 text-slate-200 hover:bg-slate-800"
+              className="px-3 py-1.5 text-sm font-medium rounded-md border border-white/30 text-white hover:bg-white/10"
             >
               Logout
             </button>
