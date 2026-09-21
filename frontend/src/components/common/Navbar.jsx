@@ -13,7 +13,7 @@ const Navbar = () => {
 
     clearAuth();
     toast.success('Logged out');
-    navigate('/login');
+    navigate('/');
   };
 
   const linkClass = ({ isActive }) =>
@@ -52,7 +52,7 @@ const Navbar = () => {
           {!isAuthenticated ? (
             <>
               <Link
-                to="/login"
+                to="/"
                 className="px-3 py-1.5 text-sm font-medium text-[#b7c9cc] hover:text-white"
               >
                 Log in

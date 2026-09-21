@@ -14,7 +14,7 @@ const ProtectedRoute = () => {
   if (!user) {
     return (
       <Navigate
-        to="/login"
+        to="/"
         replace
         state={{ from: location.pathname + location.search }}
       />

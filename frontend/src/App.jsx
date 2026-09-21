@@ -53,7 +53,7 @@ function App() {
 
           <Route element={<StandardLayout />}>
             <Route path="/" element={user ? <Navigate to="/problems" replace /> : <Login />} />
-            <Route path="/login" element={<Login />} />
+            <Route path="/login" element={<Navigate to="/" replace />} />
             <Route path="/register" element={<Register />} />
             <Route element={<ProtectedRoute />}>
               <Route path="/problems" element={<Problems />} />
